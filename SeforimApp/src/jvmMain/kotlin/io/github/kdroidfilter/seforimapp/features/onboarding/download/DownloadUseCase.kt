@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimapp.features.onboarding.download
 
+import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
 import io.github.kdroidfilter.seforimapp.network.HttpsConnectionFactory
 import io.github.kdroidfilter.seforimapp.releasefetcher.github.GitHubReleaseFetcher
 import io.github.vinceglb.filekit.FileKit
@@ -92,13 +93,13 @@ class DownloadUseCase(
                 var readSoFar = 0L
                 var total1: Long? = null
                 var total2: Long? = null
-                downloadFile(part01.browser_download_url, file01) { r, t ->
+                downloadFile(part01.browser_download_url, file01, size1.takeIf { it > 0L }) { r, t ->
                     if (t != null) total1 = t
                     readSoFar = r
                     val dynamic = (total1 ?: 0L) + (total2 ?: 0L)
                     report(readSoFar, knownTotal ?: dynamic.takeIf { it > 0L })
                 }
-                downloadFile(part02.browser_download_url, file02) { r, t ->
+                downloadFile(part02.browser_download_url, file02, size2.takeIf { it > 0L }) { r, t ->
                     if (t != null) total2 = t
                     readSoFar = (file01.length()) + r
                     val dynamic = (total1 ?: 0L) + (total2 ?: 0L)
@@ -114,7 +115,7 @@ class DownloadUseCase(
                 val tmp = File(dbDir, singleAsset.name)
                 val knownTotal = runCatching { (singleAsset.size as? Number)?.toLong() }.getOrNull()?.takeIf { it > 0L }
                 var totalLength: Long? = null
-                downloadFile(singleAsset.browser_download_url, tmp) { r, t ->
+                downloadFile(singleAsset.browser_download_url, tmp, knownTotal) { r, t ->
                     if (t != null) totalLength = t
                     report(r, knownTotal ?: totalLength)
                 }
@@ -129,6 +130,7 @@ class DownloadUseCase(
     private suspend fun downloadFile(
         url: String,
         dest: File,
+        expectedSize: Long?,
         onBytes: (readSoFar: Long, totalBytes: Long?) -> Unit,
     ) {
         withContext(Dispatchers.IO) {
@@ -149,23 +151,38 @@ class DownloadUseCase(
             val totalLength =
                 connection.contentLengthLong.takeIf { it > 0 }
                     ?: connection.getHeaderFieldLong("Content-Length", -1L).takeIf { it > 0 }
-            connection.inputStream.use { input ->
-                dest.outputStream().use { out ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var total = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read <= 0) break
-                        out.write(buffer, 0, read)
-                        total += read
-                        onBytes(total, totalLength)
+            try {
+                connection.inputStream.use { input ->
+                    // Written through a temp file: a dropped connection must not leave a truncated
+                    // `dest` that the extraction step would then treat as a complete download.
+                    dest.writeAtomically { out ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var total = 0L
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            out.write(buffer, 0, read)
+                            total += read
+                            onBytes(total, totalLength)
+                        }
+                        checkDownloadComplete(total, expectedSize ?: totalLength)
                     }
-                    out.flush()
                 }
+            } finally {
+                connection.disconnect()
             }
-            connection.disconnect()
         }
         // Final callback to ensure UI shows completed values
         onBytes(dest.length(), dest.length().takeIf { it > 0L })
+    }
+}
+
+/** Fails when a stream ended before delivering the expected number of bytes (or delivered more). */
+internal fun checkDownloadComplete(
+    received: Long,
+    expected: Long?,
+) {
+    check(expected == null || received == expected) {
+        "Download incomplete: received $received of $expected bytes"
     }
 }
