@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimapp.features.database.update
 
 import io.github.kdroidfilter.seforimapp.features.onboarding.diskspace.AvailableDiskSpaceUseCase
+import java.io.File
 
 /**
  * Single gate that must pass before any database download or extraction:
@@ -31,8 +32,9 @@ class DatabasePreparationUseCase(
         ) : Result
     }
 
-    suspend fun prepareForInstall(): Result {
-        when (val cleanup = cleanupUseCase.cleanupDatabaseFiles()) {
+    /** @param keep source files of an offline install that the cleanup must not delete. */
+    suspend fun prepareForInstall(keep: Collection<File> = emptyList()): Result {
+        when (val cleanup = cleanupUseCase.cleanupDatabaseFiles(keep)) {
             is DatabaseCleanupUseCase.CleanupResult.Incomplete ->
                 return Result.CleanupFailed(cleanup.undeletable.map { it.absolutePath })
             is DatabaseCleanupUseCase.CleanupResult.Success -> Unit
@@ -48,4 +50,17 @@ class DatabasePreparationUseCase(
             )
         }
     }
+}
+
+/**
+ * Files making up an offline bundle the user picked: both `.partNN` halves when [path] is
+ * one of them (extraction reads both), otherwise just [path].
+ */
+internal fun offlineSourceFiles(path: String): List<File> {
+    val file = File(path)
+    val name = file.name
+    val isPart = name.endsWith(".part01", ignoreCase = true) || name.endsWith(".part02", ignoreCase = true)
+    if (!isPart) return listOf(file)
+    val base = name.dropLast(".part01".length)
+    return listOf(File(file.parentFile, "$base.part01"), File(file.parentFile, "$base.part02"))
 }

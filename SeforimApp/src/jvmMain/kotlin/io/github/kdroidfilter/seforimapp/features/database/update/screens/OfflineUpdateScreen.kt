@@ -12,6 +12,7 @@ import io.github.kdroidfilter.seforimapp.core.presentation.utils.LocalWindowView
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabasePreparationUseCase
 import io.github.kdroidfilter.seforimapp.features.database.update.navigation.DatabaseUpdateDestination
 import io.github.kdroidfilter.seforimapp.features.database.update.navigation.DatabaseUpdateProgressBarState
+import io.github.kdroidfilter.seforimapp.features.database.update.offlineSourceFiles
 import io.github.kdroidfilter.seforimapp.features.onboarding.data.OnboardingProcessRepository
 import io.github.kdroidfilter.seforimapp.features.onboarding.download.DownloadErrorKind
 import io.github.kdroidfilter.seforimapp.features.onboarding.extract.ExtractEvents
@@ -62,7 +63,9 @@ fun OfflineUpdateScreen(
         scope.launch {
             prepErrorKind = null
             // Remove the old database and verify free space before extracting ~7.5 GB.
-            when (prepUseCase.prepareForInstall()) {
+            // Keep the picked bundle: it may sit in the databases directory, where the cleanup
+            // would otherwise delete it as a download leftover ("Missing part01").
+            when (prepUseCase.prepareForInstall(keep = offlineSourceFiles(p1))) {
                 DatabasePreparationUseCase.Result.Ready -> {
                     // Start extraction with part01 path; ExtractUseCase discovers part02 automatically
                     DatabaseUpdateProgressBarState.setDownloadStarted()
