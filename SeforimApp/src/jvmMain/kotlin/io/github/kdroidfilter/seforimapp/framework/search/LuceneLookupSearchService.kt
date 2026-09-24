@@ -374,7 +374,7 @@ class LuceneLookupSearchService(
 
     private fun getAcronymsForBook(bookTitle: String): List<String> = acronymCache?.getAcronymsForBook(bookTitle) ?: emptyList()
 
-    private fun normalizeHebrew(input: String): String {
+    internal fun normalizeHebrew(input: String): String {
         if (input.isBlank()) return ""
         var s = input.trim()
 
@@ -387,20 +387,15 @@ class LuceneLookupSearchService(
         s = s.replace("\u05F4", "") // Gershayim
         s = s.replace("\u05F3", "") // Geresh
 
-        // Remove ALL quote/apostrophe characters (ASCII and Unicode)
+        // Remove ALL quote/apostrophe characters (ASCII and Unicode). Escaped so an editor
+        // cannot silently turn the curly quotes into ASCII ones.
         s = s.replace("\"", "") // ASCII double quote
         s = s.replace("'", "") // ASCII single quote
         s = s.replace("`", "") // Backtick
-        s = s.replace("'", "") // Right single quote
-        s = s.replace("'", "") // Left single quote
-        s =
-            s.replace(
-                """, "")        // Left double quote
-        s = s.replace(""",
-                "",
-            ) // Right double quote
-        s = s.replace("״", "") // Hebrew gershayim
-        s = s.replace("׳", "") // Hebrew geresh
+        s = s.replace("\u2019", "") // Right single quote
+        s = s.replace("\u2018", "") // Left single quote
+        s = s.replace("\u201C", "") // Left double quote
+        s = s.replace("\u201D", "") // Right double quote
 
         // Remove punctuation and special characters
         s = s.replace("-", "") // ASCII hyphen
