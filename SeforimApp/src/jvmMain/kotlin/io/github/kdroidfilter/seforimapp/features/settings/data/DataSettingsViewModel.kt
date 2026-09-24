@@ -8,7 +8,10 @@ import dev.zacsweers.metrox.viewmodel.ViewModelKey
 import io.github.kdroidfilter.platformtools.appmanager.restartApplication
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.framework.database.getUserSettingsDatabasePath
+import io.github.kdroidfilter.seforimapp.framework.database.isSqliteDatabase
+import io.github.kdroidfilter.seforimapp.framework.database.pendingUserSettingsImportFile
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
+import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
 import io.github.vinceglb.filekit.path
@@ -75,16 +78,18 @@ class DataSettingsViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _state.update { it.copy(isImporting = true, importFailed = false, importSucceeded = false) }
-                val dbFile = File(getUserSettingsDatabasePath())
+                // Reject anything that is not a SQLite database instead of restarting onto it.
+                if (!isSqliteDatabase(importFile)) {
+                    _state.update { it.copy(isImporting = false, importFailed = true) }
+                    return@launch
+                }
 
-                // Copy imported file to replace current DB
-                Files.copy(
-                    importFile.toPath(),
-                    dbFile.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
+                // The running app holds the user DB open (locked on Windows), so the backup is
+                // staged and swapped in at the next launch, before the database is opened.
+                pendingUserSettingsImportFile().writeAtomically { out ->
+                    importFile.inputStream().use { it.copyTo(out) }
+                }
 
-                // The running app holds an open connection to the old DB; restart to load the imported one.
                 _state.update { it.copy(isImporting = false, importSucceeded = true) }
                 restartApplication()
             } catch (e: Exception) {

@@ -166,7 +166,11 @@ jobs:
       - name: Build Windows NSIS installer (GraalVM)
         if: startsWith(matrix.os, 'windows') && matrix.graalvm
         shell: pwsh
-        run: .\gradlew.bat :SeforimApp:packageGraalvmNsis
+        run: |
+          # setup-nucleus appends the JBR bin dir to PATH with a literal backspace ("`b" in PowerShell),
+          # which makes native-image fail with InvalidPathException while looking for cl.exe.
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch "`b" }) -join ';'
+          .\gradlew.bat :SeforimApp:packageGraalvmNsis
 
       # Windows JBR build (ARM64)
       - name: Build Windows NSIS installer (JBR)

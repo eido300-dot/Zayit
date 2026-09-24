@@ -2,6 +2,7 @@ package io.github.kdroidfilter.seforimapp.features.onboarding.extract
 
 import com.github.luben.zstd.ZstdInputStream
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
 import io.github.vinceglb.filekit.path
@@ -11,7 +12,6 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.io.SequenceInputStream
@@ -104,7 +104,7 @@ class ExtractUseCase {
         FileInputStream(sourceZst).use { fis ->
             val cis = CountingInputStream(fis)
             ZstdInputStream(cis).use { zin ->
-                FileOutputStream(targetDb).use { out ->
+                targetDb.writeAtomically { out ->
                     val buffer = ByteArray(1024 * 1024)
                     while (true) {
                         val read = zin.read(buffer)
@@ -112,7 +112,6 @@ class ExtractUseCase {
                         out.write(buffer, 0, read)
                         onProgress(cis.count.toFloat() / totalCompressed.toFloat())
                     }
-                    out.fd.sync()
                 }
             }
         }
@@ -149,7 +148,7 @@ class ExtractUseCase {
         }
 
         val totalCompressed = zstFile.length().coerceAtLeast(1L)
-        var extractedDb: File? = null
+        val extractedDbs = mutableListOf<File>()
         FileInputStream(zstFile).use { fis ->
             CountingInputStream(BufferedInputStream(fis, 1 shl 20)).use { cis ->
                 ZstdInputStream(cis).use { zIn ->
@@ -157,12 +156,12 @@ class ExtractUseCase {
                         while (true) {
                             val entry = tar.nextEntry ?: break
                             val name = entry.name
-                            val outFile = File(destDir, name)
+                            val outFile = resolveEntryFile(destDir, name)
                             if (entry.isDirectory) {
                                 outFile.mkdirs()
                             } else {
                                 outFile.parentFile?.mkdirs()
-                                FileOutputStream(outFile).use { out ->
+                                outFile.writeAtomically { out ->
                                     val buffer = ByteArray(1024 * 1024)
                                     var remaining = entry.size
                                     while (remaining > 0) {
@@ -173,10 +172,10 @@ class ExtractUseCase {
                                         remaining -= read
                                         onProgress(cis.count.toFloat() / totalCompressed.toFloat())
                                     }
-                                    out.fd.sync()
+                                    check(remaining == 0L) { "Archive truncated in entry $name" }
                                 }
                                 if (name.endsWith(".db", ignoreCase = true)) {
-                                    extractedDb = outFile
+                                    extractedDbs += outFile
                                 }
                             }
                             onProgress(cis.count.toFloat() / totalCompressed.toFloat())
@@ -185,7 +184,7 @@ class ExtractUseCase {
                 }
             }
         }
-        return extractedDb ?: error("No .db file found in archive")
+        return pickMainDatabase(extractedDbs)
     }
 
     private fun extractTarZstFromPartsStreaming(
@@ -236,19 +235,19 @@ class ExtractUseCase {
         val ins = parts.map { BufferedInputStream(FileInputStream(it), 1 shl 20) }
         val seq = SequenceInputStream(ins.toEnumeration())
 
-        var extractedDb: File? = null
+        val extractedDbs = mutableListOf<File>()
         CountingInputStream(seq).use { cis ->
             ZstdInputStream(cis).use { zIn ->
                 TarArchiveInputStream(zIn).use { tar ->
                     while (true) {
                         val entry = tar.nextEntry ?: break
                         val name = entry.name
-                        val outFile = File(destDir, name)
+                        val outFile = resolveEntryFile(destDir, name)
                         if (entry.isDirectory) {
                             outFile.mkdirs()
                         } else {
                             outFile.parentFile?.mkdirs()
-                            FileOutputStream(outFile).use { out ->
+                            outFile.writeAtomically { out ->
                                 val buffer = ByteArray(1024 * 1024)
                                 var remaining = entry.size
                                 while (remaining > 0) {
@@ -259,10 +258,10 @@ class ExtractUseCase {
                                     remaining -= read
                                     onUiProgress(mapProgress(cis.count))
                                 }
-                                out.fd.sync()
+                                check(remaining == 0L) { "Archive truncated in entry $name" }
                             }
                             if (name.endsWith(".db", ignoreCase = true)) {
-                                extractedDb = outFile
+                                extractedDbs += outFile
                             }
                         }
                         onUiProgress(mapProgress(cis.count))
@@ -271,7 +270,32 @@ class ExtractUseCase {
             }
         }
         onUiProgress(1f)
-        return extractedDb ?: error("No .db file found in archive")
+        return pickMainDatabase(extractedDbs)
+    }
+
+    /** Resolves a tar entry under [destDir], rejecting entries that would escape it (e.g. "../x"). */
+    internal fun resolveEntryFile(
+        destDir: File,
+        entryName: String,
+    ): File {
+        val base = destDir.canonicalFile
+        val outFile = File(base, entryName).canonicalFile
+        require(outFile.toPath().startsWith(base.toPath())) { "Archive entry escapes target directory: $entryName" }
+        return outFile
+    }
+
+    /**
+     * Archives may ship auxiliary databases (e.g. lexical.db) next to the main one, so the
+     * main database is chosen by name instead of by archive order.
+     */
+    internal fun pickMainDatabase(dbs: List<File>): File =
+        dbs.firstOrNull { it.name.equals(MAIN_DB_NAME, ignoreCase = true) }
+            ?: dbs.firstOrNull { !it.name.equals(LEXICAL_DB_NAME, ignoreCase = true) }
+            ?: error("No .db file found in archive")
+
+    private companion object {
+        const val MAIN_DB_NAME = "seforim.db"
+        const val LEXICAL_DB_NAME = "lexical.db"
     }
 
     private fun <T> List<T>.toEnumeration(): java.util.Enumeration<T> =
