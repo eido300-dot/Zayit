@@ -678,55 +678,58 @@ class SearchResultViewModel(
                 )
             // Re-open a Lucene session if there are more results to load
             if (cached.hasMore && initialQuery.isNotBlank()) {
-                viewModelScope.launch(Dispatchers.Default) {
-                    val q = initialQuery
-                    val baseBookOnly = !_uiState.value.globalExtended
-                    // Re-open session with same filters for lazy loading continuation
-                    val fetchCategoryId = persisted.fetchCategoryId.takeIf { it > 0 } ?: persisted.filterCategoryId.takeIf { it > 0 }
-                    val fetchBookId = persisted.fetchBookId.takeIf { it > 0 } ?: persisted.filterBookId.takeIf { it > 0 }
-                    val fetchTocId = persisted.fetchTocId.takeIf { it > 0 } ?: persisted.filterTocId.takeIf { it > 0 }
-                    // Collect line IDs for TOC filter if applicable
-                    val lineIds: Set<Long>? =
-                        if (fetchTocId != null && fetchBookId != null) {
-                            ensureTocCountingCaches(fetchBookId)
-                            collectLineIdsForTocSubtree(fetchTocId, fetchBookId)
-                        } else {
-                            null
-                        }
-                    // Collect book IDs for checkbox selections
-                    val allowedBooks: List<Long>? =
-                        _selectedCategoryIds.value.takeIf { it.isNotEmpty() }?.let { ids ->
-                            ids.flatMap { catId ->
-                                runSuspendCatching { collectBookIdsUnderCategory(catId) }.getOrDefault(emptyList())
+                // Held in currentJob so that a new search cancels it.
+                currentJob =
+                    viewModelScope.launch(Dispatchers.Default) {
+                        val q = initialQuery
+                        val baseBookOnly = !_uiState.value.globalExtended
+                        // Re-open session with same filters for lazy loading continuation
+                        val fetchCategoryId = persisted.fetchCategoryId.takeIf { it > 0 } ?: persisted.filterCategoryId.takeIf { it > 0 }
+                        val fetchBookId = persisted.fetchBookId.takeIf { it > 0 } ?: persisted.filterBookId.takeIf { it > 0 }
+                        val fetchTocId = persisted.fetchTocId.takeIf { it > 0 } ?: persisted.filterTocId.takeIf { it > 0 }
+                        // Collect line IDs for TOC filter if applicable
+                        val lineIds: Set<Long>? =
+                            if (fetchTocId != null && fetchBookId != null) {
+                                ensureTocCountingCaches(fetchBookId)
+                                collectLineIdsForTocSubtree(fetchTocId, fetchBookId)
+                            } else {
+                                null
                             }
-                        }
-                    val finalBookIds: List<Long>? =
-                        when {
-                            fetchBookId != null && fetchBookId > 0 -> listOf(fetchBookId)
-                            !allowedBooks.isNullOrEmpty() -> allowedBooks
-                            else -> null
-                        }
-                    val session =
-                        lucene.openSession(
-                            query = q,
-                            near = DEFAULT_NEAR,
-                            bookFilter = null,
-                            categoryFilter = fetchCategoryId,
-                            bookIds = finalBookIds,
-                            lineIds = lineIds,
-                            baseBookOnly = baseBookOnly,
-                        )
-                    // Skip pages we already have and set up lazy loading state
-                    if (session != null) {
-                        val pagesToSkip = (cached.results.size + LAZY_PAGE_SIZE - 1) / LAZY_PAGE_SIZE
-                        repeat(pagesToSkip) { session.nextPage(LAZY_PAGE_SIZE) }
-                        lazyLoadMutex.withLock {
-                            currentSession = session
-                            currentTocAllowedLineIds = lineIds ?: emptySet()
-                            currentSearchQuery = q
+                        // Collect book IDs for checkbox selections
+                        val allowedBooks: List<Long>? =
+                            _selectedCategoryIds.value.takeIf { it.isNotEmpty() }?.let { ids ->
+                                ids.flatMap { catId ->
+                                    runSuspendCatching { collectBookIdsUnderCategory(catId) }.getOrDefault(emptyList())
+                                }
+                            }
+                        val finalBookIds: List<Long>? =
+                            when {
+                                fetchBookId != null && fetchBookId > 0 -> listOf(fetchBookId)
+                                !allowedBooks.isNullOrEmpty() -> allowedBooks
+                                else -> null
+                            }
+                        val session =
+                            lucene.openSession(
+                                query = q,
+                                near = DEFAULT_NEAR,
+                                bookFilter = null,
+                                categoryFilter = fetchCategoryId,
+                                bookIds = finalBookIds,
+                                lineIds = lineIds,
+                                baseBookOnly = baseBookOnly,
+                            )
+                        // Skip pages we already have and set up lazy loading state
+                        if (session != null) {
+                            val pagesToSkip = (cached.results.size + LAZY_PAGE_SIZE - 1) / LAZY_PAGE_SIZE
+                            try {
+                                repeat(pagesToSkip) { session.nextPage(LAZY_PAGE_SIZE) }
+                            } catch (e: CancellationException) {
+                                session.close()
+                                throw e
+                            }
+                            adoptSession(session, lineIds ?: emptySet(), q)
                         }
                     }
-                }
             }
             // Immediately restore aggregates and toc counts so the tree and TOC show counts without delay
             _categoryAgg.value =
@@ -936,6 +939,8 @@ class SearchResultViewModel(
                             } // Use baseBookOnly parameter instead
                         }
 
+                    // computeFacets blocks and ignores cancellation: check after each call so a
+                    // superseded search does not overwrite the new search's state.
                     var facets =
                         lucene.computeFacets(
                             query = q,
@@ -943,6 +948,7 @@ class SearchResultViewModel(
                             bookIds = facetsBookIds,
                             baseBookOnly = baseBookOnly,
                         )
+                    ensureActive()
 
                     // Fallback: si aucun résultat en mode "livres de base", basculer en mode approfondi
                     if (facets != null && facets.totalHits == 0L && baseBookOnly) {
@@ -956,6 +962,7 @@ class SearchResultViewModel(
                                 bookIds = facetsBookIds,
                                 baseBookOnly = false,
                             )
+                        ensureActive()
                     }
 
                     if (facets != null) {
@@ -980,6 +987,8 @@ class SearchResultViewModel(
 
                     // Close any existing session before opening a new one
                     lazyLoadMutex.withLock {
+                        // A cancelled search must not close the session of the search that replaced it.
+                        ensureActive()
                         currentSession?.close()
                         currentSession = null
                     }
@@ -992,11 +1001,7 @@ class SearchResultViewModel(
                     val (session, tocAllowedLineIds) = sessionInfo
 
                     // Store session for lazy loading
-                    lazyLoadMutex.withLock {
-                        currentSession = session
-                        currentTocAllowedLineIds = tocAllowedLineIds
-                        currentSearchQuery = q
-                    }
+                    adoptSession(session, tocAllowedLineIds, q)
 
                     // Load only the first page
                     val firstPage = session.nextPage(LAZY_PAGE_SIZE)
@@ -1042,7 +1047,8 @@ class SearchResultViewModel(
                                 .first()
                         }
                     }
-                    _uiState.value = _uiState.value.copy(isLoading = false)
+                    // When cancelled, the search that replaced this one (or cancelSearch) owns isLoading.
+                    if (isActive) _uiState.value = _uiState.value.copy(isLoading = false)
                 }
             }
     }
@@ -1133,6 +1139,30 @@ class SearchResultViewModel(
             } finally {
                 runCatching { session.close() }
             }
+        }
+    }
+
+    /**
+     * Makes [session] the one [loadMore] pages through. If the calling search was cancelled
+     * meanwhile (even while waiting for the lock), [session] is closed instead: a newer search
+     * owns [currentSession] now.
+     */
+    private suspend fun adoptSession(
+        session: SearchSession,
+        tocAllowedLineIds: Set<Long>,
+        query: String,
+    ) {
+        try {
+            lazyLoadMutex.withLock {
+                currentCoroutineContext().ensureActive()
+                if (currentSession !== session) currentSession?.close()
+                currentSession = session
+                currentTocAllowedLineIds = tocAllowedLineIds
+                currentSearchQuery = query
+            }
+        } catch (e: CancellationException) {
+            session.close()
+            throw e
         }
     }
 
@@ -1417,6 +1447,8 @@ class SearchResultViewModel(
 
                     // Close existing session
                     lazyLoadMutex.withLock {
+                        // A cancelled filter must not close the session of the search that replaced it.
+                        ensureActive()
                         currentSession?.close()
                         currentSession = null
                     }
@@ -1458,11 +1490,7 @@ class SearchResultViewModel(
                         return@launch
                     }
 
-                    lazyLoadMutex.withLock {
-                        currentSession = session
-                        currentTocAllowedLineIds = emptySet()
-                        currentSearchQuery = q
-                    }
+                    adoptSession(session, emptySet(), q)
 
                     // Load first page
                     val firstPage = session.nextPage(LAZY_PAGE_SIZE)
@@ -1487,7 +1515,8 @@ class SearchResultViewModel(
                             progressCurrent = results.size,
                         )
                 } finally {
-                    _uiState.value = _uiState.value.copy(isLoading = false)
+                    // When cancelled, the search that replaced this one (or cancelSearch) owns isLoading.
+                    if (isActive) _uiState.value = _uiState.value.copy(isLoading = false)
                 }
             }
     }
@@ -1643,6 +1672,8 @@ class SearchResultViewModel(
 
                     // Close existing session
                     lazyLoadMutex.withLock {
+                        // A cancelled filter must not close the session of the search that replaced it.
+                        ensureActive()
                         currentSession?.close()
                         currentSession = null
                     }
@@ -1675,11 +1706,7 @@ class SearchResultViewModel(
                         return@launch
                     }
 
-                    lazyLoadMutex.withLock {
-                        currentSession = session
-                        currentTocAllowedLineIds = emptySet()
-                        currentSearchQuery = q
-                    }
+                    adoptSession(session, emptySet(), q)
 
                     // Load first page
                     val firstPage = session.nextPage(LAZY_PAGE_SIZE)
@@ -1707,7 +1734,8 @@ class SearchResultViewModel(
                             scrollToAnchorTimestamp = System.currentTimeMillis(),
                         )
                 } finally {
-                    _uiState.value = _uiState.value.copy(isLoading = false)
+                    // When cancelled, the search that replaced this one (or cancelSearch) owns isLoading.
+                    if (isActive) _uiState.value = _uiState.value.copy(isLoading = false)
                 }
             }
     }
