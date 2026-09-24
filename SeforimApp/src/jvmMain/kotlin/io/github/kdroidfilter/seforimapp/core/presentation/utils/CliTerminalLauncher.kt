@@ -1,9 +1,9 @@
 package io.github.kdroidfilter.seforimapp.core.presentation.utils
 
 import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
+import io.github.kdroidfilter.seforimapp.framework.platform.currentExecutablePath
 import io.github.kdroidfilter.seforimapp.logger.errorln
 import io.github.kdroidfilter.seforimapp.logger.infoln
-import java.io.File
 import java.nio.file.Paths
 
 /**
@@ -36,7 +36,7 @@ object CliTerminalLauncher {
     }
 
     private fun launchBlocking(commandArgs: List<String>) {
-        val exe = resolveExecutablePath() ?: error("could not resolve the running executable path")
+        val exe = currentExecutablePath()?.toString() ?: error("could not resolve the running executable path")
         val tokens =
             buildList {
                 add(exe)
@@ -52,37 +52,6 @@ object CliTerminalLauncher {
             os.contains("win") -> openWindowsTerminal(tokens)
             else -> openLinuxTerminal(tokens)
         }
-    }
-
-    /**
-     * Resolves the path of the currently running application binary.
-     *
-     * - `jpackage.app-path` is set by jpackage-style launchers and points at the user-facing
-     *   executable.
-     * - Otherwise [ProcessHandle.current] returns the launching command, which for the GraalVM
-     *   native image is the `zayit` binary itself.
-     *
-     * Returns `null` (e.g. a plain `java -jar` dev run, where the command is the JDK launcher and
-     * re-launching it would not enter our `main`).
-     */
-    private fun resolveExecutablePath(): String? {
-        System.getProperty("jpackage.app-path")?.takeIf { it.isNotBlank() && File(it).exists() }?.let { return it }
-
-        val command =
-            ProcessHandle
-                .current()
-                .info()
-                .command()
-                .orElse(null)
-                ?.takeIf { it.isNotBlank() }
-        if (command != null) {
-            val name = File(command).name.lowercase()
-            // A JVM launcher means we are running from a dev/classpath setup, not the packaged
-            // native binary — re-launching `java` would not re-enter our main() with `cli`.
-            val isJvmLauncher = name == "java" || name == "javaw" || name == "java.exe" || name == "javaw.exe"
-            if (!isJvmLauncher && File(command).exists()) return command
-        }
-        return null
     }
 
     /**
