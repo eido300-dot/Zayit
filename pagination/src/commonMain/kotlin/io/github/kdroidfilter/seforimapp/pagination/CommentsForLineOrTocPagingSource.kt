@@ -20,33 +20,17 @@ class CommentsForLineOrTocPagingSource(
     // Resolved set of lineIds to fetch (single line or section lines). Lazy initialized.
     private var resolvedLineIds: List<Long>? = null
 
-    override fun getRefreshKey(state: PagingState<Int, CommentaryWithText>): Int? =
-        state.anchorPosition?.let { anchorPosition ->
-            val anchorPage = state.closestPageToPosition(anchorPosition)
-            anchorPage?.prevKey?.plus(1) ?: anchorPage?.nextKey?.minus(1)
-        }
+    override fun getRefreshKey(state: PagingState<Int, CommentaryWithText>): Int? = state.offsetRefreshKey()
 
     override suspend fun load(params: LoadParams<Int>): LoadResult<Int, CommentaryWithText> =
         try {
-            val page = params.key ?: 0
-            val limit = params.loadSize
-            val offset = page * limit
-            val maxBatchSize = max(64, limit)
+            val window = params.offsetWindow()
 
             if (resolvedLineIds == null) {
                 val headingToc = repository.getHeadingTocEntryByLineId(baseLineId)
                 resolvedLineIds =
                     if (headingToc != null) {
-                        val lines = repository.getLineIdsForTocEntry(headingToc.id).filter { it != baseLineId }
-                        val idx = lines.indexOf(baseLineId)
-                        if (idx >= 0) {
-                            val half = maxBatchSize / 2
-                            val start = max(0, idx - half)
-                            val end = min(lines.size, start + maxBatchSize)
-                            lines.subList(start, end)
-                        } else {
-                            lines.take(maxBatchSize)
-                        }
+                        sectionWindow(repository.getLineIdsForTocEntry(headingToc.id))
                     } else {
                         listOf(baseLineId)
                     }
@@ -59,19 +43,34 @@ class CommentsForLineOrTocPagingSource(
                     lineIds = ids,
                     activeCommentatorIds = commentatorIds,
                     connectionTypes = setOf(ConnectionType.COMMENTARY),
-                    offset = offset,
-                    limit = limit,
+                    offset = window.offset,
+                    limit = window.limit,
                 )
 
-            val prevKey = if (page == 0) null else page - 1
-            val nextKey = if (commentaries.isEmpty()) null else page + 1
-
-            LoadResult.Page(
-                data = commentaries,
-                prevKey = prevKey,
-                nextKey = nextKey,
-            )
+            window.toPage(commentaries)
         } catch (e: Exception) {
             LoadResult.Error(e)
         }
+
+    /**
+     * Same window as the section selection in ContentUseCase (up to [MAX_SECTION_LINES] lines
+     * around the heading), so the commentaries match the lines highlighted in the text.
+     * The heading line itself is excluded.
+     */
+    private fun sectionWindow(sectionLineIds: List<Long>): List<Long> {
+        val limited =
+            if (sectionLineIds.size > MAX_SECTION_LINES) {
+                val idx = max(0, sectionLineIds.indexOf(baseLineId))
+                val start = max(0, idx - MAX_SECTION_LINES / 2)
+                val end = min(sectionLineIds.size, start + MAX_SECTION_LINES)
+                sectionLineIds.subList(start, end)
+            } else {
+                sectionLineIds
+            }
+        return limited.filter { it != baseLineId }
+    }
+
+    companion object {
+        const val MAX_SECTION_LINES = 128
+    }
 }
