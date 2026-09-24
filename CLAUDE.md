@@ -71,7 +71,7 @@ Configuration files:
 This is a **Kotlin Multiplatform desktop application** built with:
 - **UI**: Compose Multiplatform + Jewel themes for native desktop look
 - **DI**: Metro dependency injection with `AppGraph` accessible via `LocalAppGraph`
-- **Navigation**: Custom RAM-efficient tab system (`TabsContent`)
+- **Navigation**: Custom tab system (`TabsContent`), no Compose Navigation
 - **Data**: SeforimLibrary composite build (core domain + dao persistence + generator tools)
 - **Platform**: JVM desktop with macOS/Windows/Linux native packaging
 
@@ -97,13 +97,13 @@ The `SeforimLibrary` composite build provides the core functionality for Jewish 
 - **Dependencies**: Core + DAO + Lucene + JSoup + compression libraries
 - **Platform**: JVM only (heavy processing)
 
-### Memory-Efficient Tab System
-See `TAB_SYSTEM_README.md` for complete details. Key points:
+### Tab System
+`TAB_SYSTEM_README.md` is outdated (it describes an LRU, `TabStateManager` and `TabAwareViewModel`, none of which exist). Key points:
 - Each tab owns its own `SimpleTabViewModelOwner` (ViewModel lifecycle), which stays alive while the tab exists
-- `TabStateManager` persists lightweight state for cold-boot restoration
+- `TabsContent` keeps **every** open tab composed; only the selected tab is measured and drawn. Switching is instant, but RAM grows with the number of open tabs
+- `TabPersistedStateStore` holds lightweight per-tab state (`get`/`update`/`remove` by `tabId`); `SessionManager` saves it to disk for cold-boot restoration
 - `TabsViewModel` manages tab lifecycle (create/select/close/replace)
-- Use `TabAwareViewModel` base class for screens needing state persistence
-- `TabsContent` renders without Compose Navigation and keeps an LRU of up to `MAX_RETAINED_TAB_COMPOSITIONS` (3) tab compositions; others are torn down and rebuilt from saved state on switch
+- A tab keeps its `tabId` (and so its ViewModels) across `replaceCurrentTabDestination`; use `replaceCurrentTabWithNewTabId` when the old ViewModels must not be reused (e.g. going Home)
 
 ### Dependency Injection (Metro)
 - App-wide graph: `AppGraph` created with `createGraph<AppGraph>()`
@@ -168,9 +168,9 @@ See `TAB_SYSTEM_README.md` for complete details. Key points:
 - **Example**: `SeforimApp/src/jvmTest/kotlin/io/github/kdroidfilter/seforimapp/SampleTest.kt`
 
 ### State Management
-- **Tab State**: Use `TabAwareViewModel` + `saveState()`/`getState()` for restoration
+- **Tab State**: Read and write `TabPersistedStateStore` by `tabId` for restoration
 - **Global State**: Avoid; prefer dependency injection and proper component lifecycle
-- **RAM Optimization**: Built-in; only the selected tab plus an LRU of `MAX_RETAINED_TAB_COMPOSITIONS` (3) compositions are kept active (`TabsContent`)
+- **RAM**: every open tab stays composed (`TabsContent`); hidden tabs skip layout and draw but keep their ViewModels
 
 ### Security & Configuration
 - **Secrets**: Never commit to repository; use `local.properties` for machine-specific settings
@@ -183,43 +183,38 @@ See `TAB_SYSTEM_README.md` for complete details. Key points:
 // Open new tab
 val tabsVm = LocalAppGraph.current.tabsViewModel
 scope.launch {
-    tabsVm.openTab(TabsDestination.BookContent(bookId = "123", tabId = UUID.randomUUID().toString()))
+    tabsVm.openTab(TabsDestination.BookContent(bookId = 123L, tabId = UUID.randomUUID().toString()))
 }
 
-// Replace current tab destination
-tabsVm.replaceCurrentTabDestination(TabsDestination.Home(currentTabId))
+// Navigate the current tab (keeps its tabId and ViewModels)
+tabsVm.replaceCurrentTabDestination(TabsDestination.Search(searchQuery = query, tabId = currentTabId))
+
+// Go Home with a fresh tabId, so the old tab's ViewModels are not reused
+tabsVm.replaceCurrentTabWithNewTabId(TabsDestination.Home(currentTabId))
 ```
 
 ### ViewModel Creation
 ```kotlin
-// In Compose
-val appGraph = LocalAppGraph.current
-val viewModel = remember(appGraph, destination) {
-    appGraph.bookContentViewModel(backStackEntry.savedStateHandle)
-}
+// In TabsContent: ViewModels are scoped to the tab's owner via Metro assisted injection
+tabOwner.setDefaultArgs(savedState { putString(StateKeys.TAB_ID, tabId) })
+val viewModel: BookContentViewModel = assistedMetroViewModel(viewModelStoreOwner = tabOwner)
 ```
 
 ### State Persistence
 ```kotlin
-class MyViewModel(
-    savedStateHandle: SavedStateHandle,
-    stateManager: TabStateManager
-) : TabAwareViewModel(
-    tabId = savedStateHandle.get<String>("tabId") ?: "",
-    stateManager = stateManager
-) {
-    private val _myState = MutableStateFlow(getState<String>("myState") ?: "")
-    
-    fun updateState(newValue: String) {
-        _myState.value = newValue
-        saveState("myState", newValue)
-    }
+// Per-tab state lives in TabPersistedStateStore (injected), keyed by the tab's id
+private val tabId: String = savedStateHandle.get<String>(StateKeys.TAB_ID) ?: ""
+
+val restoredQuery = persistedStore.get(tabId)?.search?.query.orEmpty()
+
+persistedStore.update(tabId) { current ->
+    current.copy(search = (current.search ?: SearchPersistedState()).copy(query = newQuery))
 }
 ```
 
 ### Performance
 - **Hot Reload**: Use `hotRunJvm` + `reload` for fast iteration
-- **Memory**: Bounded by design — at most the selected tab + 3 retained compositions stay active regardless of open tab count
+- **Memory**: grows with open tabs, since every tab stays composed (see Tab System)
 - **Large Datasets**: Leverage Paging 3 for efficient data loading
 
 ## File Locations Reference
@@ -228,5 +223,5 @@ class MyViewModel(
 - **Features**: `SeforimApp/src/jvmMain/kotlin/io/github/kdroidfilter/seforimapp/features/`
 - **Resources**: `SeforimApp/src/commonMain/composeResources/`
 - **Desktop Assets**: `SeforimApp/src/jvmMain/assets/`
-- **Tab System**: See `TAB_SYSTEM_README.md`
+- **Tab System**: `SeforimApp/src/jvmMain/kotlin/io/github/kdroidfilter/seforimapp/core/presentation/tabs/TabsContent.kt` (`TAB_SYSTEM_README.md` is outdated)
 - **Version Catalog**: `gradle/libs.versions.toml`

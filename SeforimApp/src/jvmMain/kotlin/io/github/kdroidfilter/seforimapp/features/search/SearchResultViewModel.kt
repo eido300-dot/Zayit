@@ -1040,46 +1040,54 @@ class SearchResultViewModel(
      * Called when user scrolls near the bottom of the list.
      */
     fun loadMore() {
-        if (_uiState.value.isLoadingMore || !_uiState.value.hasMore) return
+        val state = _uiState.value
+        if (state.isLoadingMore || !state.hasMore) return
+        // Set the flag before launching so a second scroll trigger cannot start a concurrent load.
+        _uiState.update { it.copy(isLoadingMore = true) }
 
         viewModelScope.launch(Dispatchers.Default) {
-            _uiState.value = _uiState.value.copy(isLoadingMore = true)
             try {
-                val session = lazyLoadMutex.withLock { currentSession }
-                if (session == null) {
-                    // Session not ready yet (e.g., still being restored), reset loading state
-                    _uiState.value = _uiState.value.copy(isLoadingMore = false)
-                    return@launch
-                }
-                val tocAllowedLineIds = currentTocAllowedLineIds
-                val query = currentSearchQuery
+                // Null while a session is still being restored: nothing to load yet.
+                val (session, tocAllowedLineIds, query) =
+                    lazyLoadMutex.withLock {
+                        Triple(currentSession ?: return@launch, currentTocAllowedLineIds, currentSearchQuery)
+                    }
 
                 val page = session.nextPage(LAZY_PAGE_SIZE)
                 if (page == null) {
-                    _uiState.value = _uiState.value.copy(hasMore = false, isLoadingMore = false)
+                    lazyLoadMutex.withLock {
+                        if (currentSession === session) _uiState.update { it.copy(hasMore = false) }
+                    }
                     return@launch
                 }
 
                 val filteredHits = executeSearchUseCase.filterHitsByLineIds(page.hits, tocAllowedLineIds)
-
-                // Update TOC counts for this page
-                if (filteredHits.isNotEmpty()) {
-                    _uiState.value.scopeBook
-                        ?.id
-                        ?.let { updateTocCountsForHits(filteredHits, it) }
-                }
-
                 val newResults = hitsToResults(filteredHits, query)
-                val currentResults = _uiState.value.results
-                _uiState.value =
-                    _uiState.value.copy(
-                        results = currentResults + newResults,
-                        hasMore = !page.isLastPage,
-                        progressCurrent = currentResults.size + newResults.size,
-                        isLoadingMore = false,
-                    )
+
+                lazyLoadMutex.withLock {
+                    // A new search (or cancel) replaced the session while this page was loading:
+                    // its results belong to the previous query and must not be appended.
+                    if (currentSession !== session) return@launch
+
+                    if (filteredHits.isNotEmpty()) {
+                        _uiState.value.scopeBook
+                            ?.id
+                            ?.let { updateTocCountsForHits(filteredHits, it) }
+                    }
+                    _uiState.update {
+                        it.copy(
+                            results = it.results + newResults,
+                            hasMore = !page.isLastPage,
+                            progressCurrent = it.results.size + newResults.size,
+                        )
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
-                _uiState.value = _uiState.value.copy(isLoadingMore = false)
+                // Leave the results as they are; the finally block re-enables loading.
+            } finally {
+                _uiState.update { it.copy(isLoadingMore = false) }
             }
         }
     }
