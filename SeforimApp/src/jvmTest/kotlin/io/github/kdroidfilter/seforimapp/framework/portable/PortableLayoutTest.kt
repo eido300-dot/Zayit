@@ -136,7 +136,8 @@ class PortableLayoutTest {
 
     @Test
     fun `translocated paths are detected with either separator`() {
-        assertTrue(isTranslocated(Path.of("/private/var/folders/x/T/AppTranslocation/ABC/d/Zayit.app/Contents/MacOS/zayit")))
+        val translocated = "/private/var/folders/x/T/AppTranslocation/ABC/d/Zayit.app/Contents/MacOS/zayit"
+        assertTrue(isTranslocated(Path.of(translocated)))
         assertTrue(isTranslocated(Path.of("C:\\x\\AppTranslocation\\y\\zayit.exe")))
         assertFalse(isTranslocated(Path.of("/Applications/Zayit.app/Contents/MacOS/zayit")))
     }
