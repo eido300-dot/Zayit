@@ -2,6 +2,7 @@ package io.github.kdroidfilter.seforimapp.features.onboarding.extract
 
 import com.github.luben.zstd.ZstdInputStream
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
 import io.github.vinceglb.filekit.path
@@ -11,7 +12,6 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.io.SequenceInputStream
@@ -104,7 +104,7 @@ class ExtractUseCase {
         FileInputStream(sourceZst).use { fis ->
             val cis = CountingInputStream(fis)
             ZstdInputStream(cis).use { zin ->
-                FileOutputStream(targetDb).use { out ->
+                targetDb.writeAtomically { out ->
                     val buffer = ByteArray(1024 * 1024)
                     while (true) {
                         val read = zin.read(buffer)
@@ -112,7 +112,6 @@ class ExtractUseCase {
                         out.write(buffer, 0, read)
                         onProgress(cis.count.toFloat() / totalCompressed.toFloat())
                     }
-                    out.fd.sync()
                 }
             }
         }
@@ -162,7 +161,7 @@ class ExtractUseCase {
                                 outFile.mkdirs()
                             } else {
                                 outFile.parentFile?.mkdirs()
-                                FileOutputStream(outFile).use { out ->
+                                outFile.writeAtomically { out ->
                                     val buffer = ByteArray(1024 * 1024)
                                     var remaining = entry.size
                                     while (remaining > 0) {
@@ -173,7 +172,7 @@ class ExtractUseCase {
                                         remaining -= read
                                         onProgress(cis.count.toFloat() / totalCompressed.toFloat())
                                     }
-                                    out.fd.sync()
+                                    check(remaining == 0L) { "Archive truncated in entry $name" }
                                 }
                                 if (name.endsWith(".db", ignoreCase = true)) {
                                     extractedDbs += outFile
@@ -248,7 +247,7 @@ class ExtractUseCase {
                             outFile.mkdirs()
                         } else {
                             outFile.parentFile?.mkdirs()
-                            FileOutputStream(outFile).use { out ->
+                            outFile.writeAtomically { out ->
                                 val buffer = ByteArray(1024 * 1024)
                                 var remaining = entry.size
                                 while (remaining > 0) {
@@ -259,7 +258,7 @@ class ExtractUseCase {
                                     remaining -= read
                                     onUiProgress(mapProgress(cis.count))
                                 }
-                                out.fd.sync()
+                                check(remaining == 0L) { "Archive truncated in entry $name" }
                             }
                             if (name.endsWith(".db", ignoreCase = true)) {
                                 extractedDbs += outFile
