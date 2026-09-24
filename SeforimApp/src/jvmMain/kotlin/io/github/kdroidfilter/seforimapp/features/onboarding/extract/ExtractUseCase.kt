@@ -2,11 +2,13 @@ package io.github.kdroidfilter.seforimapp.features.onboarding.extract
 
 import com.github.luben.zstd.ZstdInputStream
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.framework.database.PendingDbCleanup
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
 import io.github.vinceglb.filekit.path
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.BufferedInputStream
 import java.io.File
@@ -15,6 +17,7 @@ import java.io.FileOutputStream
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.io.SequenceInputStream
+import java.text.Normalizer
 
 class ExtractUseCase(
     private val appSettings: AppSettings,
@@ -151,43 +154,46 @@ class ExtractUseCase(
         }
 
         val totalCompressed = zstFile.length().coerceAtLeast(1L)
-        var extractedDb: File? = null
+        val extractedDbs = mutableListOf<File>()
         FileInputStream(zstFile).use { fis ->
             CountingInputStream(BufferedInputStream(fis, 1 shl 20)).use { cis ->
                 ZstdInputStream(cis).use { zIn ->
                     TarArchiveInputStream(zIn).use { tar ->
                         while (true) {
                             val entry = tar.nextEntry ?: break
-                            val name = entry.name
-                            val outFile = File(destDir, name)
-                            if (entry.isDirectory) {
-                                outFile.mkdirs()
-                            } else {
-                                outFile.parentFile?.mkdirs()
-                                FileOutputStream(outFile).use { out ->
-                                    val buffer = ByteArray(1024 * 1024)
-                                    var remaining = entry.size
-                                    while (remaining > 0) {
-                                        val toRead = if (remaining >= buffer.size) buffer.size else remaining.toInt()
-                                        val read = tar.read(buffer, 0, toRead)
-                                        if (read <= 0) break
-                                        out.write(buffer, 0, read)
-                                        remaining -= read
-                                        onProgress(cis.count.toFloat() / totalCompressed.toFloat())
+                            // Links, devices and FIFOs are never created: only directories and regular files.
+                            if (!entry.isLinkOrDevice()) {
+                                val name = entry.name
+                                val outFile = resolveEntryFile(destDir, name, isDirectory = entry.isDirectory)
+                                if (entry.isDirectory) {
+                                    outFile.mkdirs()
+                                } else {
+                                    outFile.parentFile?.mkdirs()
+                                    FileOutputStream(outFile).use { out ->
+                                        val buffer = ByteArray(1024 * 1024)
+                                        var remaining = entry.size
+                                        while (remaining > 0) {
+                                            val toRead = if (remaining >= buffer.size) buffer.size else remaining.toInt()
+                                            val read = tar.read(buffer, 0, toRead)
+                                            if (read <= 0) break
+                                            out.write(buffer, 0, read)
+                                            remaining -= read
+                                            onProgress(cis.count.toFloat() / totalCompressed.toFloat())
+                                        }
+                                        out.fd.sync()
                                     }
-                                    out.fd.sync()
+                                    if (name.endsWith(".db", ignoreCase = true)) {
+                                        extractedDbs += outFile
+                                    }
                                 }
-                                if (name.endsWith(".db", ignoreCase = true)) {
-                                    extractedDb = outFile
-                                }
+                                onProgress(cis.count.toFloat() / totalCompressed.toFloat())
                             }
-                            onProgress(cis.count.toFloat() / totalCompressed.toFloat())
                         }
                     }
                 }
             }
         }
-        return extractedDb ?: error("No .db file found in archive")
+        return pickMainDatabase(extractedDbs)
     }
 
     private fun extractTarZstFromPartsStreaming(
@@ -238,42 +244,85 @@ class ExtractUseCase(
         val ins = parts.map { BufferedInputStream(FileInputStream(it), 1 shl 20) }
         val seq = SequenceInputStream(ins.toEnumeration())
 
-        var extractedDb: File? = null
+        val extractedDbs = mutableListOf<File>()
         CountingInputStream(seq).use { cis ->
             ZstdInputStream(cis).use { zIn ->
                 TarArchiveInputStream(zIn).use { tar ->
                     while (true) {
                         val entry = tar.nextEntry ?: break
-                        val name = entry.name
-                        val outFile = File(destDir, name)
-                        if (entry.isDirectory) {
-                            outFile.mkdirs()
-                        } else {
-                            outFile.parentFile?.mkdirs()
-                            FileOutputStream(outFile).use { out ->
-                                val buffer = ByteArray(1024 * 1024)
-                                var remaining = entry.size
-                                while (remaining > 0) {
-                                    val toRead = if (remaining >= buffer.size) buffer.size else remaining.toInt()
-                                    val read = tar.read(buffer, 0, toRead)
-                                    if (read <= 0) break
-                                    out.write(buffer, 0, read)
-                                    remaining -= read
-                                    onUiProgress(mapProgress(cis.count))
+                        // Links, devices and FIFOs are never created: only directories and regular files.
+                        if (!entry.isLinkOrDevice()) {
+                            val name = entry.name
+                            val outFile = resolveEntryFile(destDir, name, isDirectory = entry.isDirectory)
+                            if (entry.isDirectory) {
+                                outFile.mkdirs()
+                            } else {
+                                outFile.parentFile?.mkdirs()
+                                FileOutputStream(outFile).use { out ->
+                                    val buffer = ByteArray(1024 * 1024)
+                                    var remaining = entry.size
+                                    while (remaining > 0) {
+                                        val toRead = if (remaining >= buffer.size) buffer.size else remaining.toInt()
+                                        val read = tar.read(buffer, 0, toRead)
+                                        if (read <= 0) break
+                                        out.write(buffer, 0, read)
+                                        remaining -= read
+                                        onUiProgress(mapProgress(cis.count))
+                                    }
+                                    out.fd.sync()
                                 }
-                                out.fd.sync()
+                                if (name.endsWith(".db", ignoreCase = true)) {
+                                    extractedDbs += outFile
+                                }
                             }
-                            if (name.endsWith(".db", ignoreCase = true)) {
-                                extractedDb = outFile
-                            }
+                            onUiProgress(mapProgress(cis.count))
                         }
-                        onUiProgress(mapProgress(cis.count))
                     }
                 }
             }
         }
         onUiProgress(1f)
-        return extractedDb ?: error("No .db file found in archive")
+        return pickMainDatabase(extractedDbs)
+    }
+
+    /** Resolves a tar entry under [destDir], rejecting entries that would escape it (e.g. "../x"). */
+    internal fun resolveEntryFile(
+        destDir: File,
+        entryName: String,
+        isDirectory: Boolean = false,
+    ): File {
+        val base = destDir.canonicalFile
+        val outFile = File(base, entryName).canonicalFile
+        require(outFile.toPath().startsWith(base.toPath())) { "Archive entry escapes target directory: $entryName" }
+        // A file entry named "", "." or "./" would be written over the target directory itself.
+        require(isDirectory || outFile != base) { "Archive file entry has no name: $entryName" }
+        // Nor may it land in the app's own state next to the database (settings, session, cleanup list).
+        val relative = base.toPath().relativize(outFile.toPath())
+        // Spelled as the file system may resolve it: Windows drops trailing dots and spaces on create,
+        // and case-insensitive volumes fold compatibility characters (e.g. U+017F as "s").
+        val topLevel = Normalizer.normalize(relative.getName(0).toString().trimEnd('.', ' '), Normalizer.Form.NFKC).lowercase()
+        require(topLevel !in RESERVED_TOP_LEVEL_NAMES) { "Archive entry targets app data: $entryName" }
+        return outFile
+    }
+
+    private fun TarArchiveEntry.isLinkOrDevice(): Boolean = isSymbolicLink || isLink || isCharacterDevice || isBlockDevice || isFIFO
+
+    /**
+     * Archives may ship auxiliary databases (e.g. lexical.db) next to the main one, so the
+     * main database is chosen by name instead of by archive order.
+     */
+    internal fun pickMainDatabase(dbs: List<File>): File =
+        dbs.firstOrNull { it.name.equals(MAIN_DB_NAME, ignoreCase = true) }
+            ?: dbs.firstOrNull { !it.name.equals(LEXICAL_DB_NAME, ignoreCase = true) }
+            ?: error("No .db file found in archive")
+
+    private companion object {
+        const val MAIN_DB_NAME = "seforim.db"
+        const val LEXICAL_DB_NAME = "lexical.db"
+
+        // App state kept in the database directory: user settings, saved session, the reinstall
+        // cleanup list (whose entries are deleted at the next launch) and the delta updater's work dir.
+        val RESERVED_TOP_LEVEL_NAMES = setOf("settings", "session", PendingDbCleanup.MARKER_NAME, "delta-cache")
     }
 
     private fun <T> List<T>.toEnumeration(): java.util.Enumeration<T> =
