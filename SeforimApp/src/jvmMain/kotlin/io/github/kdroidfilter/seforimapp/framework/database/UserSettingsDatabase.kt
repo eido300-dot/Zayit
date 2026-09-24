@@ -1,9 +1,16 @@
 package io.github.kdroidfilter.seforimapp.framework.database
 
+import io.github.kdroidfilter.seforimapp.framework.io.moveOver
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
 import io.github.vinceglb.filekit.path
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
+import java.sql.DriverManager
+import java.sql.SQLException
+import java.util.Properties
 
 private const val SETTINGS_DB_DIR = "settings"
 private const val SETTINGS_DB_NAME = "user_settings.db"
@@ -12,3 +19,100 @@ fun getUserSettingsDatabasePath(): String {
     val root = File(FileKit.databasesDir.path, SETTINGS_DB_DIR).apply { mkdirs() }
     return File(root, SETTINGS_DB_NAME).absolutePath
 }
+
+private const val PENDING_IMPORT_SUFFIX = ".import-pending"
+private const val REPLACED_BACKUP_SUFFIX = ".before-import"
+private val JOURNAL_SUFFIXES = listOf("-journal", "-wal")
+private const val SHM_SUFFIX = "-shm"
+
+// sqlite-jdbc open flags: SQLITE_OPEN_READONLY.
+private const val SQLITE_OPEN_READONLY = "1"
+
+// SQLite result codes: SQLITE_CORRUPT and SQLITE_NOTADB.
+private val DAMAGED_RESULT_CODES = setOf(11, 26)
+private const val PRIMARY_RESULT_CODE_MASK = 0xFF
+private val SQLITE_HEADER = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
+
+/**
+ * Where an imported backup is staged until the next launch. The running app keeps the user
+ * database open, so replacing it in place fails on Windows (file locked) and elsewhere swaps
+ * the file under a live connection.
+ */
+fun pendingUserSettingsImportFile(dbPath: String = getUserSettingsDatabasePath()): File = File(dbPath + PENDING_IMPORT_SUFFIX)
+
+/** Where the database the latest import replaced is kept, so that import can be undone by hand. */
+fun replacedUserSettingsBackupFile(dbPath: String = getUserSettingsDatabasePath()): File = File(dbPath + REPLACED_BACKUP_SUFFIX)
+
+/**
+ * Moves a staged import over the user database. Must run before the database is opened. A staged
+ * file found damaged (or placed there by hand) is deleted instead; one that cannot be checked
+ * right now (still locked, I/O error) throws and stays staged for the next launch.
+ */
+fun applyPendingUserSettingsImport(dbPath: String = getUserSettingsDatabasePath()) {
+    val pending = pendingUserSettingsImportFile(dbPath)
+    if (!pending.exists()) return
+    val sound = checkNotNull(quickCheck(pending)) { "Staged settings import could not be checked: $pending" }
+    if (!sound) {
+        deleteWithSidecars(pending)
+        return
+    }
+    val db = File(dbPath)
+    if (db.exists()) {
+        // The copy keeps the journal files, so it opens exactly as the replaced database would have.
+        val backup = replacedUserSettingsBackupFile(dbPath).path
+        Files.copy(Paths.get(dbPath), Paths.get(backup), StandardCopyOption.REPLACE_EXISTING)
+        JOURNAL_SUFFIXES.forEach { suffix ->
+            val journal = Paths.get(dbPath + suffix)
+            if (Files.exists(journal)) {
+                Files.copy(journal, Paths.get(backup + suffix), StandardCopyOption.REPLACE_EXISTING)
+            } else {
+                Files.deleteIfExists(Paths.get(backup + suffix))
+            }
+        }
+    }
+    // Journal sidecars of the old database must not be replayed onto the imported one. One that
+    // cannot be deleted (still locked) throws, and the import waits for the next launch.
+    (JOURNAL_SUFFIXES + SHM_SUFFIX).forEach { suffix -> Files.deleteIfExists(Paths.get(dbPath + suffix)) }
+    pending.moveOver(db)
+    // Opening the staged file for the check may have left -shm/-wal files next to it.
+    deleteWithSidecars(pending)
+}
+
+private fun deleteWithSidecars(file: File) {
+    (listOf("") + JOURNAL_SUFFIXES + SHM_SUFFIX).forEach { suffix -> Files.deleteIfExists(Paths.get(file.path + suffix)) }
+}
+
+/**
+ * True when [file] opens read-only as an SQLite database and passes `PRAGMA quick_check`. A
+ * truncated or damaged file can still carry a valid header, and would otherwise replace the user
+ * database at the next launch.
+ */
+fun passesQuickCheck(file: File): Boolean = quickCheck(file) == true
+
+/**
+ * Runs `PRAGMA quick_check` on [file], opened read-only: true when it is sound, false when SQLite
+ * finds it damaged or not a database, null when it could not be checked (missing, locked, I/O).
+ */
+private fun quickCheck(file: File): Boolean? =
+    try {
+        val readOnly = Properties().apply { setProperty("open_mode", SQLITE_OPEN_READONLY) }
+        DriverManager.getConnection("jdbc:sqlite:${file.absolutePath}", readOnly).use { connection ->
+            connection.createStatement().use { statement ->
+                // The file is untrusted: no SQL functions from its schema run during the check.
+                statement.execute("PRAGMA trusted_schema=OFF")
+                statement.executeQuery("PRAGMA quick_check").use { rows -> rows.next() && rows.getString(1) == "ok" }
+            }
+        }
+    } catch (e: SQLException) {
+        // Extended result codes keep the primary code in their low byte.
+        if ((e.errorCode and PRIMARY_RESULT_CODE_MASK) in DAMAGED_RESULT_CODES) false else null
+    }
+
+/** True when [file] starts with the SQLite 3 header, i.e. can be used as the user database. */
+fun isSqliteDatabase(file: File): Boolean =
+    runCatching {
+        file.inputStream().use { input ->
+            val header = ByteArray(SQLITE_HEADER.size)
+            input.readNBytes(header, 0, header.size) == header.size && header.contentEquals(SQLITE_HEADER)
+        }
+    }.getOrDefault(false)
