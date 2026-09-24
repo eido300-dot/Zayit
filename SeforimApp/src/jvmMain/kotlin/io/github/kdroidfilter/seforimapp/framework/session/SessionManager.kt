@@ -177,10 +177,10 @@ object SessionManager {
                     snapshots = mapOf(desktopId to snapshot),
                 )
 
-            // Save in new format and delete legacy file
+            // Save in new format and delete legacy file. Synced, since the legacy file goes next.
             runCatching {
                 val newBytes = proto.encodeToByteArray(DesktopsState.serializer(), state)
-                desktopsF.writeBytes(newBytes)
+                desktopsF.writeAtomically { it.write(newBytes) }
                 legacyF.delete()
             }
 
