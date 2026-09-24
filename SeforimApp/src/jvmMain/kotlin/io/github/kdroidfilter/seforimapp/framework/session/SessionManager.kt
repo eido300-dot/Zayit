@@ -9,6 +9,7 @@ import io.github.kdroidfilter.seforimapp.core.e2e.E2e
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.framework.desktop.DesktopManager
 import io.github.kdroidfilter.seforimapp.framework.di.AppGraph
+import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
 import io.github.kdroidfilter.seforimapp.logger.debugln
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.vinceglb.filekit.FileKit
@@ -81,7 +82,10 @@ object SessionManager {
 
         runCatching {
             val bytes = proto.encodeToByteArray(DesktopsState.serializer(), desktopsState)
-            desktopsFile().writeBytes(bytes)
+            // Atomic replace: an interrupted write (update installer, kill) must not leave a
+            // truncated file, which would fail to decode and be deleted on the next launch.
+            // No fsync: this runs on the UI thread, and the rename alone covers a killed app.
+            desktopsFile().writeAtomically(sync = false) { it.write(bytes) }
         }
     }
 
