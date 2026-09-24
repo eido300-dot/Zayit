@@ -171,7 +171,7 @@ object SessionManager {
             // Save in new format and delete legacy file
             runCatching {
                 val newBytes = proto.encodeToByteArray(DesktopsState.serializer(), state)
-                desktopsF.writeBytes(newBytes)
+                desktopsF.writeAtomically { it.write(newBytes) }
                 legacyF.delete()
             }
 

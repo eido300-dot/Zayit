@@ -11,6 +11,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -76,13 +77,73 @@ private fun saveableKeyFor(destination: TabsDestination): String = "${destinatio
 private fun saveableKeysFor(tabId: String): List<String> = listOf("$tabId:home", "$tabId:search", "$tabId:book")
 
 /**
+ * Most recently selected tabs kept alive: composed, with their ViewModels. Switching among them
+ * is instant, since their paged lists stay collected. Older tabs are disposed together with their
+ * ViewModels and restored from
+ * [io.github.kdroidfilter.seforimapp.framework.session.TabPersistedStateStore] when selected again,
+ * as after a cold start. Composition and ViewModel always go together: a live ViewModel under a
+ * rebuilt composition re-collects its pager from empty and visibly jumps.
+ */
+internal const val MAX_LIVE_TABS = 5
+
+/**
+ * The live tabs after a selection or tab-list change: most recently selected first, closed tabs
+ * dropped, at most [max] entries.
+ */
+internal fun nextLiveTabIds(
+    recent: List<String>,
+    activeTabIds: Set<String>,
+    currentTabId: String?,
+    max: Int = MAX_LIVE_TABS,
+): List<String> {
+    val ordered = listOfNotNull(currentTabId) + recent.filter { it != currentTabId }
+    return ordered.filter { it in activeTabIds }.take(max)
+}
+
+/**
+ * Tabs to compose this frame: the selected tab, even before [recent] includes it, then the most
+ * recent ones, [max] in total. Matches what [nextLiveTabIds] keeps once it runs.
+ */
+internal fun composedTabIds(
+    recent: List<String>,
+    currentTabId: String?,
+    max: Int = MAX_LIVE_TABS,
+): Set<String> = (listOfNotNull(currentTabId) + recent).distinct().take(max).toSet()
+
+/** The book/line a book tab was last asked to open, so a restored tab does not re-open it. */
+private data class BookTarget(
+    val bookId: Long,
+    val lineId: Long?,
+)
+
+/** Per-tab [BookTarget]s already opened. Read and written only from the composition's thread. */
+private class AppliedBookTargets {
+    private val byTabId = mutableMapOf<String, BookTarget>()
+
+    fun isApplied(
+        tabId: String,
+        target: BookTarget,
+    ): Boolean = byTabId[tabId] == target
+
+    fun markApplied(
+        tabId: String,
+        target: BookTarget,
+    ) {
+        byTabId[tabId] = target
+    }
+
+    fun remove(tabId: String) {
+        byTabId.remove(tabId)
+    }
+}
+
+/**
  * Simplified tab content renderer without Compose Navigation.
  *
- * Every open tab is composed and kept alive; switching never tears a tab down. Only the selected
- * tab is measured and placed, so hidden tabs incur no layout/draw cost while their ViewModel,
- * paging flow and scroll state stay hot. This is what makes switching instant and glitch-free:
- * the paged content list is never re-collected from empty, so there is no reload-and-jump and no
- * need for any alpha/crossfade masking. The cost is RAM proportional to the number of open tabs.
+ * The [MAX_LIVE_TABS] most recently selected tabs stay composed; only the selected one is measured
+ * and placed, so hidden tabs cost no layout/draw while their paging flow and scroll state stay hot.
+ * Switching among them is instant and glitch-free. Older tabs are released, so RAM no longer grows
+ * with the number of open tabs.
  */
 @Composable
 fun TabsContent() {
@@ -177,12 +238,32 @@ fun TabsContent() {
         }
     }
 
-    // ViewModel owners per tab - manages lifecycle and state. Owners survive while the
-    // tab is open so re-selecting a tab needs no DB refetch (data is hot in the ViewModel).
+    // ViewModel owners per tab - manages lifecycle and state. Owners survive while the tab is
+    // among the MAX_LIVE_TABS most recent, so re-selecting it needs no DB refetch.
     val tabOwners = remember { mutableMapOf<String, SimpleTabViewModelOwner>() }
     val knownTabIds = remember { mutableSetOf<String>() }
     // Holds per-tab saveable UI state across the teardown/rebuild that happens on switch.
     val saveableStateHolder = rememberSaveableStateHolder()
+    // Most recently selected first; the tabs kept alive.
+    val recentTabIds = remember { mutableStateListOf<String>() }
+    // Survives composition teardown and ViewModel eviction; dropped when the tab closes.
+    val appliedBookTargets = remember { AppliedBookTargets() }
+
+    LaunchedEffect(tabs, currentTabId) {
+        val activeTabIds = tabs.map { it.destination.tabId }.toSet()
+        val live = nextLiveTabIds(recentTabIds.toList(), activeTabIds, currentTabId)
+        if (live != recentTabIds.toList()) {
+            recentTabIds.clear()
+            recentTabIds.addAll(live)
+        }
+        // The composition below already dropped these tabs this frame. Their saveable UI state goes
+        // too: the new ViewModel restores from the persisted anchor, exactly like a cold start.
+        val keep = recentTabIds.toSet()
+        (tabOwners.keys - keep).forEach { tabId ->
+            tabOwners.remove(tabId)?.clear()
+            saveableKeysFor(tabId).forEach(saveableStateHolder::removeState)
+        }
+    }
 
     // Cleanup removed tabs
     LaunchedEffect(tabs) {
@@ -192,6 +273,7 @@ fun TabsContent() {
             tabOwners.remove(tabId)?.clear()
             persistedStore.remove(tabId)
             saveableKeysFor(tabId).forEach(saveableStateHolder::removeState)
+            appliedBookTargets.remove(tabId)
         }
         knownTabIds.clear()
         knownTabIds.addAll(activeTabIds)
@@ -228,14 +310,13 @@ fun TabsContent() {
                 .fillMaxSize()
                 .background(canvasBg),
     ) {
-        // Keep every open tab's composition alive; a tab is never torn down on switch. Each tab is
-        // measured and drawn only while selected — hidden tabs stay composed (their ViewModel,
-        // paging flow and LazyListState all hot) but are not measured or placed, so they cost no
-        // layout/draw. Crucially, because nothing is disposed, the paged content list never reloads
-        // from empty: switching back is instant, with no reload-and-jump and no alpha/crossfade
-        // masking. The trade-off is RAM proportional to the number of open tabs.
+        // Keep the recently selected tabs composed. Each is measured and drawn only while selected;
+        // hidden ones stay composed (ViewModel, paging flow and LazyListState hot) but cost no
+        // layout/draw. The selected tab is always included, even before recentTabIds catches up.
+        val composed = composedTabIds(recentTabIds, currentTabId)
         tabs.forEach { tabItem ->
             val tabId = tabItem.destination.tabId
+            if (tabId !in composed) return@forEach
             val isSelected = tabId == currentTabId
             val saveableKey = saveableKeyFor(tabItem.destination)
             key(saveableKey) {
@@ -284,6 +365,7 @@ fun TabsContent() {
                                     BookContentTabContent(
                                         tabOwner = tabOwner,
                                         destination = destination,
+                                        appliedBookTargets = appliedBookTargets,
                                         isSelected = isSelected,
                                         isRestoringSession = isTransitioning,
                                         searchUi = searchUi,
@@ -430,16 +512,21 @@ private fun SearchTabContent(
 private fun BookContentTabContent(
     tabOwner: SimpleTabViewModelOwner,
     destination: TabsDestination.BookContent,
+    appliedBookTargets: AppliedBookTargets,
     isSelected: Boolean,
     isRestoringSession: Boolean,
     searchUi: io.github.kdroidfilter.seforimapp.features.search.SearchHomeUiState,
     searchCallbacks: HomeSearchCallbacks,
 ) {
+    val target = BookTarget(destination.bookId, destination.lineId)
+    // Once this target was opened, a ViewModel restored after its tab was released must go back to
+    // the saved scroll position, not jump to the line the tab was first opened at.
+    val alreadyApplied = appliedBookTargets.isApplied(destination.tabId, target)
     tabOwner.setDefaultArgs(
         savedState {
             putString(StateKeys.TAB_ID, destination.tabId)
             if (destination.bookId > 0) putLong(StateKeys.BOOK_ID, destination.bookId)
-            destination.lineId?.let { putLong(StateKeys.LINE_ID, it) }
+            if (!alreadyApplied) destination.lineId?.let { putLong(StateKeys.LINE_ID, it) }
         },
     )
 
@@ -448,8 +535,11 @@ private fun BookContentTabContent(
     val showDiacritics by viewModel.showDiacritics.collectAsState()
     val bookCharCounts by viewModel.bookCharCounts.collectAsState()
 
-    // React to destination changes when ViewModel is reused
+    // React to destination changes when ViewModel is reused. Skipped when the tab is only being
+    // restored after it was released: re-sending the event would jump back to the original line.
     LaunchedEffect(destination.bookId, destination.lineId) {
+        if (appliedBookTargets.isApplied(destination.tabId, target)) return@LaunchedEffect
+        appliedBookTargets.markApplied(destination.tabId, target)
         if (destination.bookId > 0) {
             val lineId = destination.lineId
             if (lineId != null && lineId > 0) {
