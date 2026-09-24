@@ -3,7 +3,9 @@
 -- user_highlights, so notes survive books-DB delta updates and stay valid across diacritics
 -- display changes.
 -- [quote] stores the anchored passage (the selected text) so the notes pane keeps showing it,
--- including after the note is saved. Defaulted so the column can be added to pre-existing DBs.
+-- including after the note is saved.
+-- Schema.create only runs CREATE TABLE IF NOT EXISTS: a column added here later does NOT reach
+-- existing user databases, whose inserts would then fail. Add an ALTER TABLE step for it.
 CREATE TABLE IF NOT EXISTS user_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bookId INTEGER NOT NULL,
