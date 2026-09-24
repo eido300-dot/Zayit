@@ -261,7 +261,7 @@ nucleus.application {
         publish {
             github {
                 enabled = true
-                owner = "kdroidFilter"
+                owner = "eido300-dot"
                 repo = "Zayit"
                 channel = ReleaseChannel.Latest
                 releaseType = ReleaseType.Release
