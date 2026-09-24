@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A single position-based user highlight.
@@ -59,7 +60,8 @@ class HighlightStore(
     private val _highlightsByBook = MutableStateFlow<Map<Long, List<UserHighlight>>>(emptyMap())
     val highlightsByBook: StateFlow<Map<Long, List<UserHighlight>>> = _highlightsByBook.asStateFlow()
 
-    private val loadedBooks = mutableSetOf<Long>()
+    // Touched from Dispatchers.IO threads of several tabs at once.
+    private val loadedBooks: MutableSet<Long> = ConcurrentHashMap.newKeySet()
 
     /** Loads a book's highlights into the cache once. Subsequent calls are no-ops. */
     suspend fun loadBook(bookId: Long): Unit =

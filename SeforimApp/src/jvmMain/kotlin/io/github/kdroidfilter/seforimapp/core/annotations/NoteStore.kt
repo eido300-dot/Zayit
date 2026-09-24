@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A single position-based user note, anchored to a character range on a line. A line may carry
@@ -47,7 +48,8 @@ class NoteStore(
     private val _notesByBook = MutableStateFlow<Map<Long, List<UserNote>>>(emptyMap())
     val notesByBook: StateFlow<Map<Long, List<UserNote>>> = _notesByBook.asStateFlow()
 
-    private val loadedBooks = mutableSetOf<Long>()
+    // Touched from Dispatchers.IO threads of several tabs at once.
+    private val loadedBooks: MutableSet<Long> = ConcurrentHashMap.newKeySet()
 
     /** Loads a book's notes into the cache once. Subsequent calls are no-ops. */
     suspend fun loadBook(bookId: Long): Unit =
