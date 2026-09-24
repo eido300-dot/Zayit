@@ -25,6 +25,19 @@ object PortableEnvironment {
     /** True when all app data and settings live next to the program. */
     val isPortable: Boolean get() = layout != null
 
+    /**
+     * The settings file on the drive, or `null` in host mode. One instance per process: two
+     * stores on the same file would each write their own snapshot and lose the other's changes.
+     * Pending changes are written on exit, waiting at most [DEFAULT_FLUSH_TIMEOUT_MILLIS].
+     */
+    val settingsStore: PortableSettingsStore? by lazy {
+        layout?.let { portable ->
+            PortableSettingsStore.open(portable.settingsFile).also { store ->
+                Runtime.getRuntime().addShutdownHook(Thread({ store.flush() }, "portable-settings-flush"))
+            }
+        }
+    }
+
     private fun readOverride(): String? =
         (System.getenv(PORTABLE_DATA_DIR_OVERRIDE) ?: System.getProperty(PORTABLE_DATA_DIR_OVERRIDE))
             ?.trim()

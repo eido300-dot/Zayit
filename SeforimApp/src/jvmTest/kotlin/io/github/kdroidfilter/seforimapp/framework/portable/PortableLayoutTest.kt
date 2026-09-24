@@ -152,4 +152,33 @@ class PortableLayoutTest {
         assertNotEquals(first, other)
         assertTrue(Regex("io\\.github\\.app-portable-[0-9a-f]{8}").matches(first), first)
     }
+
+    @Test
+    fun `path inside the data dir is stored relative and survives a moved drive`() {
+        val dataDir = root.resolve("E/$PORTABLE_DATA_DIR_NAME")
+        val db = dataDir.resolve("databases/seforim.db").toString()
+
+        val stored = toStoredPath(db, dataDir)
+        assertEquals("databases/seforim.db", stored)
+
+        val movedDataDir = root.resolve("F/$PORTABLE_DATA_DIR_NAME")
+        assertEquals(movedDataDir.resolve("databases/seforim.db").toString(), fromStoredPath(stored, movedDataDir))
+    }
+
+    @Test
+    fun `path outside the data dir is stored and read back unchanged`() {
+        val dataDir = root.resolve(PORTABLE_DATA_DIR_NAME)
+        val elsewhere = root.resolve("other/seforim.db").toAbsolutePath().toString()
+
+        assertEquals(elsewhere, toStoredPath(elsewhere, dataDir))
+        assertEquals(elsewhere, fromStoredPath(elsewhere, dataDir))
+    }
+
+    @Test
+    fun `sibling folder sharing the data dir name prefix is not treated as inside it`() {
+        val dataDir = root.resolve(PORTABLE_DATA_DIR_NAME)
+        val sibling = root.resolve("$PORTABLE_DATA_DIR_NAME-old/seforim.db").toAbsolutePath().toString()
+
+        assertEquals(sibling, toStoredPath(sibling, dataDir))
+    }
 }

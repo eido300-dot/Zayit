@@ -6,6 +6,9 @@ import com.russhwolf.settings.set
 import io.github.kdroidfilter.seforimapp.core.presentation.theme.AccentColor
 import io.github.kdroidfilter.seforimapp.core.presentation.theme.IntUiThemes
 import io.github.kdroidfilter.seforimapp.core.presentation.theme.ThemeStyle
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
+import io.github.kdroidfilter.seforimapp.framework.portable.fromStoredPath
+import io.github.kdroidfilter.seforimapp.framework.portable.toStoredPath
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -93,7 +96,7 @@ object AppSettings {
 
     // Backing Settings storage (can be replaced at startup if needed)
     @Volatile
-    private var settings: Settings = Settings()
+    private var settings: Settings = PortableEnvironment.settingsStore?.settings ?: Settings()
 
     // Allow optional initialization with an externally provided Settings instance
     fun initialize(settings: Settings) {
@@ -310,9 +313,12 @@ object AppSettings {
 
     // Database path settings
     // Returns null if not configured or if stored as an empty string
+    // Portable: a path on the drive is stored relative to its data dir, so it survives the drive
+    // getting another letter or mount point on the next computer.
     fun getDatabasePath(): String? {
         val value: String = settings[KEY_DATABASE_PATH, ""]
-        return value.ifBlank { null }
+        if (value.isBlank()) return null
+        return PortableEnvironment.layout?.let { fromStoredPath(value, it.dataDir) } ?: value
     }
 
     fun setDatabasePath(path: String?) {
@@ -321,7 +327,7 @@ object AppSettings {
             settings[KEY_DATABASE_PATH] = ""
             _databasePathFlow.value = null
         } else {
-            settings[KEY_DATABASE_PATH] = path
+            settings[KEY_DATABASE_PATH] = PortableEnvironment.layout?.let { toStoredPath(path, it.dataDir) } ?: path
             _databasePathFlow.value = path
         }
     }

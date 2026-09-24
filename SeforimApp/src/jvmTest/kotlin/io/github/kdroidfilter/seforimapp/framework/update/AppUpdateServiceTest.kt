@@ -125,6 +125,28 @@ class AppUpdateServiceTest {
         }
 
     @Test
+    fun `portable copy never checks or installs updates`() =
+        runTest {
+            var checked = false
+            val fake =
+                object : Updater by FakeUpdater(UpdateResult.Available(updateInfo("1.0.1"), UpdateLevel.PATCH)) {
+                    override suspend fun checkForUpdates(): UpdateResult {
+                        checked = true
+                        return UpdateResult.NotAvailable
+                    }
+                }
+            val svc = AppUpdateService(updaterProvider = { fake }, config = AppUpdateConfig(), os = Platform.Windows, isPortable = true)
+
+            svc.checkOnStartup()
+            svc.recheck()
+
+            assertFalse(checked)
+            assertEquals(UpdateUiState.Idle, svc.state.value)
+            assertFalse(svc.isUpdateSupported())
+            assertFalse(svc.installPendingOnClose())
+        }
+
+    @Test
     fun `dialog visibility toggles`() {
         val (svc, _) = service(UpdateResult.NotAvailable, Platform.Windows)
         assertFalse(svc.dialogVisible.value)

@@ -11,6 +11,7 @@ import dev.nucleusframework.updater.UpdateLevel
 import dev.nucleusframework.updater.UpdateResult
 import dev.nucleusframework.updater.provider.GenericProvider
 import dev.nucleusframework.updater.provider.GitHubProvider
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.kdroidfilter.seforimapp.logger.errorln
 import io.github.kdroidfilter.seforimapp.logger.infoln
 import io.github.santimattius.structured.annotations.StructuredScope
@@ -208,6 +209,8 @@ class AppUpdateService(
     private val os: Platform,
     // App-lifetime scope so a user-triggered download keeps running after the dialog is closed.
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    // A portable copy never updates itself: the installer would install onto the host computer.
+    private val isPortable: Boolean = false,
 ) {
     private val updater: Updater by lazy(updaterProvider)
 
@@ -222,6 +225,7 @@ class AppUpdateService(
 
     /** Checks for updates once at startup and pre-downloads PATCH updates. */
     suspend fun checkOnStartup() {
+        if (isPortable) return
         if (config.fakeState != null) return // state pre-seeded by initialFakeState()
         if (_state.value != UpdateUiState.Idle) return
         _state.value = UpdateUiState.Checking
@@ -349,7 +353,7 @@ class AppUpdateService(
         _dialogVisible.value = false
     }
 
-    fun isUpdateSupported(): Boolean = config.fakeState != null || updater.isUpdateSupported()
+    fun isUpdateSupported(): Boolean = !isPortable && (config.fakeState != null || updater.isUpdateSupported())
 
     private fun initialFakeState(): UpdateUiState? {
         val fake = config.fakeState ?: return null
@@ -407,6 +411,7 @@ class AppUpdateService(
                 },
                 config = config,
                 os = os,
+                isPortable = PortableEnvironment.isPortable,
             )
     }
 }

@@ -92,6 +92,34 @@ private fun dataDirFor(
 }
 
 /**
+ * How a path is stored in portable settings: relative to [dataDir] when it lies inside it, so the
+ * path stays valid when the drive gets another letter or mount point. Other paths are kept as is.
+ */
+fun toStoredPath(
+    path: String,
+    dataDir: Path,
+): String =
+    try {
+        val absolute = Path.of(path).toAbsolutePath().normalize()
+        val root = dataDir.toAbsolutePath().normalize()
+        if (absolute.startsWith(root) && absolute != root) root.relativize(absolute).joinToString("/") else path
+    } catch (_: InvalidPathException) {
+        path
+    }
+
+/** Inverse of [toStoredPath]: resolves a relative stored path against [dataDir]. */
+fun fromStoredPath(
+    stored: String,
+    dataDir: Path,
+): String =
+    try {
+        val path = Path.of(stored)
+        if (path.isAbsolute) stored else dataDir.resolve(path).normalize().toString()
+    } catch (_: InvalidPathException) {
+        stored
+    }
+
+/**
  * Single-instance lock name for a portable copy. It differs from the installed app's lock so a
  * portable copy started while the installed app runs opens its own window instead of handing
  * over to the installed one (which would show host data).

@@ -12,6 +12,7 @@ import io.github.kdroidfilter.seforimapp.framework.database.isSqliteDatabase
 import io.github.kdroidfilter.seforimapp.framework.database.pendingUserSettingsImportFile
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
 import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
 import io.github.vinceglb.filekit.path
@@ -110,6 +111,8 @@ class DataSettingsViewModel : ViewModel() {
             val customDbPath = runCatching { AppSettings.getDatabasePath() }.getOrNull()
 
             AppSettings.clearAll()
+            // Portable: also drop the .bak copies, so old values cannot come back from them.
+            PortableEnvironment.settingsStore?.resetFiles()
 
             // Delete every file/directory in the managed databases directory (this also holds the
             // user settings DB with notes and highlights).

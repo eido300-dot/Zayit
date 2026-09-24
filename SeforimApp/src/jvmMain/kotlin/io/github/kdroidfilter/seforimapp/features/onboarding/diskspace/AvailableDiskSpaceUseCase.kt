@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimapp.features.onboarding.diskspace
 
 import dev.nucleusframework.systeminfo.SystemInfo
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -13,8 +14,22 @@ class AvailableDiskSpaceUseCase {
         withContext(Dispatchers.IO) {
             val disks = SystemInfo.disks()
 
+            // Portable: the database goes to the drive holding the data dir, so measure that one
+            // (the longest mount point containing it, e.g. a USB stick mounted under /media).
+            val portableDir =
+                PortableEnvironment.layout
+                    ?.dataDir
+                    ?.toAbsolutePath()
+                    ?.toString()
+            val portableDisk =
+                portableDir?.let { dir ->
+                    disks
+                        .filter { it.mountPoint.isNotEmpty() && dir.startsWith(it.mountPoint, ignoreCase = true) }
+                        .maxByOrNull { it.mountPoint.length }
+                }
+
             val systemDir =
-                disks.firstOrNull {
+                portableDisk ?: disks.firstOrNull {
                     it.mountPoint.contains(System.getProperty("user.home")) ||
                         it.mountPoint == "/" ||
                         it.mountPoint.startsWith("C:")

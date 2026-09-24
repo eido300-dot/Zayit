@@ -21,6 +21,7 @@ import com.kdroid.gematria.converter.toHebrewNumeral
 import dev.nucleusframework.application.aotTraining
 import dev.nucleusframework.application.nucleusApplication
 import dev.nucleusframework.core.runtime.NucleusApp
+import dev.nucleusframework.core.runtime.SingleInstanceManager
 import dev.nucleusframework.energymanager.EnergyManager
 import dev.nucleusframework.window.jewel.JewelDecoratedWindow
 import dev.zacsweers.metro.createGraph
@@ -56,6 +57,8 @@ import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.di.AppGraph
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
 import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
+import io.github.kdroidfilter.seforimapp.framework.portable.lockIdentifierFor
 import io.github.kdroidfilter.seforimapp.framework.session.SessionManager
 import io.github.kdroidfilter.seforimapp.logger.infoln
 import io.github.kdroidfilter.seforimapp.logger.isDevEnv
@@ -148,6 +151,12 @@ fun main(args: Array<String>) {
 //    DbDeltaRecoveryBootstrap.runOnce()
 
     val appId = "io.github.kdroidfilter.seforimapp"
+    val portable = PortableEnvironment.layout
+    if (portable != null) {
+        // Must be set before nucleusApplication acquires the lock.
+        SingleInstanceManager.configuration =
+            SingleInstanceManager.Configuration(lockIdentifier = lockIdentifierFor(appId, portable.dataDir))
+    }
 
     nucleusApplication(
         args,
@@ -155,7 +164,12 @@ fun main(args: Array<String>) {
     ) {
         aotTraining(duration = AOT_TRAINING_DURATION)
 
-        FileKit.init(appId)
+        // Portable: databasesDir becomes zayit-data/databases on the drive.
+        if (portable != null) {
+            FileKit.init(appId, filesDir = portable.filesDir.toFile(), cacheDir = portable.cacheDir.toFile())
+        } else {
+            FileKit.init(appId)
+        }
 
         // Retry any database cleanup a previous run could not finish (e.g. a file locked
         // by antivirus/Windows Search). Runs once, before the SQLDelight repository opens
