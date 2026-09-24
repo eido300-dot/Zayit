@@ -116,6 +116,27 @@ private data class BookTarget(
     val lineId: Long?,
 )
 
+/** Per-tab [BookTarget]s already opened. Read and written only from the composition's thread. */
+private class AppliedBookTargets {
+    private val byTabId = mutableMapOf<String, BookTarget>()
+
+    fun isApplied(
+        tabId: String,
+        target: BookTarget,
+    ): Boolean = byTabId[tabId] == target
+
+    fun markApplied(
+        tabId: String,
+        target: BookTarget,
+    ) {
+        byTabId[tabId] = target
+    }
+
+    fun remove(tabId: String) {
+        byTabId.remove(tabId)
+    }
+}
+
 /**
  * Simplified tab content renderer without Compose Navigation.
  *
@@ -226,7 +247,7 @@ fun TabsContent() {
     // Most recently selected first; the tabs kept alive.
     val recentTabIds = remember { mutableStateListOf<String>() }
     // Survives composition teardown and ViewModel eviction; dropped when the tab closes.
-    val appliedBookTargets = remember { mutableMapOf<String, BookTarget>() }
+    val appliedBookTargets = remember { AppliedBookTargets() }
 
     LaunchedEffect(tabs, currentTabId) {
         val activeTabIds = tabs.map { it.destination.tabId }.toSet()
@@ -491,7 +512,7 @@ private fun SearchTabContent(
 private fun BookContentTabContent(
     tabOwner: SimpleTabViewModelOwner,
     destination: TabsDestination.BookContent,
-    appliedBookTargets: MutableMap<String, BookTarget>,
+    appliedBookTargets: AppliedBookTargets,
     isSelected: Boolean,
     isRestoringSession: Boolean,
     searchUi: io.github.kdroidfilter.seforimapp.features.search.SearchHomeUiState,
@@ -500,7 +521,7 @@ private fun BookContentTabContent(
     val target = BookTarget(destination.bookId, destination.lineId)
     // Once this target was opened, a ViewModel restored after its tab was released must go back to
     // the saved scroll position, not jump to the line the tab was first opened at.
-    val alreadyApplied = appliedBookTargets[destination.tabId] == target
+    val alreadyApplied = appliedBookTargets.isApplied(destination.tabId, target)
     tabOwner.setDefaultArgs(
         savedState {
             putString(StateKeys.TAB_ID, destination.tabId)
@@ -517,8 +538,8 @@ private fun BookContentTabContent(
     // React to destination changes when ViewModel is reused. Skipped when the tab is only being
     // restored after it was released: re-sending the event would jump back to the original line.
     LaunchedEffect(destination.bookId, destination.lineId) {
-        if (appliedBookTargets[destination.tabId] == target) return@LaunchedEffect
-        appliedBookTargets[destination.tabId] = target
+        if (appliedBookTargets.isApplied(destination.tabId, target)) return@LaunchedEffect
+        appliedBookTargets.markApplied(destination.tabId, target)
         if (destination.bookId > 0) {
             val lineId = destination.lineId
             if (lineId != null && lineId > 0) {
