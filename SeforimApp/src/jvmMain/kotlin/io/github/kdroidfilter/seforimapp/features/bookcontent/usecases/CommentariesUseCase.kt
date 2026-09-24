@@ -24,10 +24,15 @@ import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentarySummary
 import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentaryWithText
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.max
@@ -52,11 +57,69 @@ class CommentariesUseCase(
     // toggling the commentaries pane, or an actual composition teardown). Without this, each
     // request builds a fresh cachedIn flow and reloads commentaries from the DB — the cause of the
     // visible delay before commentaries reappear. Bounded (access-order LRU) so visited-but-stale
-    // pagers don't accumulate unbounded heap.
+    // pagers don't accumulate unbounded heap. Each pager is cached in its own child scope:
+    // cachedIn keeps collecting (and holding its pages) until that scope is cancelled, so
+    // dropping the map entry alone would free nothing.
+    private inner class CachedPager(
+        private val create: (CoroutineScope) -> Flow<PagingData<CommentaryWithText>>,
+    ) {
+        private var collectors = 0
+        private var evicted = false
+        private var pagerScope: CoroutineScope? = null
+        private var shared: Flow<PagingData<CommentaryWithText>>? = null
+
+        /**
+         * Stable for the pager's whole life. The cached pager behind it is built on first
+         * collection, and rebuilt if a screen still holding this flow collects it after the pager
+         * was freed, so such a column reloads instead of staying frozen.
+         */
+        val flow: Flow<PagingData<CommentaryWithText>> =
+            flow {
+                val upstream = acquire()
+                try {
+                    emitAll(upstream)
+                } finally {
+                    release()
+                }
+            }
+
+        /** Frees the pager's pages once nothing shows it; a pager still on screen keeps paging. */
+        @Synchronized
+        fun evict() {
+            evicted = true
+            if (collectors == 0) free()
+        }
+
+        @Synchronized
+        private fun acquire(): Flow<PagingData<CommentaryWithText>> {
+            collectors++
+            shared?.let { return it }
+            // Child of the ViewModel scope: cancelled after eviction, or with the ViewModel.
+            val child = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+            pagerScope = child
+            return create(child).also { shared = it }
+        }
+
+        @Synchronized
+        private fun release() {
+            collectors--
+            if (collectors == 0 && evicted) free()
+        }
+
+        private fun free() {
+            pagerScope?.cancel()
+            pagerScope = null
+            shared = null
+        }
+    }
+
     private val pagerFlowCache =
-        object : LinkedHashMap<String, Flow<PagingData<CommentaryWithText>>>(16, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Flow<PagingData<CommentaryWithText>>>?): Boolean =
-                size > MAX_CACHED_PAGERS
+        object : LinkedHashMap<String, CachedPager>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedPager>?): Boolean {
+                val evict = size > MAX_CACHED_PAGERS
+                if (evict) eldest?.value?.evict()
+                return evict
+            }
         }
 
     // Read-through cache of commentator GROUPS per base line. Survives tab switches (the use
@@ -68,11 +131,12 @@ class CommentariesUseCase(
                 size > MAX_CACHED_LINE_CONNECTIONS
         }
 
+    /** Returns the memoized pager for [key]; [create] must cache it in the scope it is given. */
     @Synchronized
     private fun cachedPager(
         key: String,
-        create: () -> Flow<PagingData<CommentaryWithText>>,
-    ): Flow<PagingData<CommentaryWithText>> = pagerFlowCache.getOrPut(key, create)
+        create: (CoroutineScope) -> Flow<PagingData<CommentaryWithText>>,
+    ): Flow<PagingData<CommentaryWithText>> = pagerFlowCache.getOrPut(key) { CachedPager(create) }.flow
 
     private data class BaseLineResolution(
         val baseLineIds: List<Long>,
@@ -104,14 +168,14 @@ class CommentariesUseCase(
         lineId: Long,
         commentatorId: Long? = null,
     ): Flow<PagingData<CommentaryWithText>> =
-        cachedPager("com:$lineId:${commentatorId ?: -1L}") {
+        cachedPager("com:$lineId:${commentatorId ?: -1L}") { pagerScope ->
             val ids = commentatorId?.let { setOf(it) } ?: emptySet()
             Pager(
                 config = PagingDefaults.COMMENTS.config(placeholders = false),
                 pagingSourceFactory = {
                     CommentsForLineOrTocPagingSource(repository, lineId, ids)
                 },
-            ).flow.cachedIn(scope)
+            ).flow.cachedIn(pagerScope)
         }
 
     /**
@@ -182,28 +246,28 @@ class CommentariesUseCase(
         lineId: Long,
         sourceBookId: Long? = null,
     ): Flow<PagingData<CommentaryWithText>> =
-        cachedPager("tgm:$lineId:${sourceBookId ?: -1L}") {
+        cachedPager("tgm:$lineId:${sourceBookId ?: -1L}") { pagerScope ->
             val ids = sourceBookId?.let { setOf(it) } ?: emptySet()
             Pager(
                 config = PagingDefaults.COMMENTS.config(placeholders = false),
                 pagingSourceFactory = {
                     LineTargumPagingSource(repository, lineId, ids, setOf(ConnectionType.TARGUM))
                 },
-            ).flow.cachedIn(scope)
+            ).flow.cachedIn(pagerScope)
         }
 
     fun buildSourcesPager(
         lineId: Long,
         sourceBookId: Long? = null,
     ): Flow<PagingData<CommentaryWithText>> =
-        cachedPager("src:$lineId:${sourceBookId ?: -1L}") {
+        cachedPager("src:$lineId:${sourceBookId ?: -1L}") { pagerScope ->
             val ids = sourceBookId?.let { setOf(it) } ?: emptySet()
             Pager(
                 config = PagingDefaults.COMMENTS.config(placeholders = false),
                 pagingSourceFactory = {
                     LineTargumPagingSource(repository, lineId, ids, setOf(ConnectionType.SOURCE))
                 },
-            ).flow.cachedIn(scope)
+            ).flow.cachedIn(pagerScope)
         }
 
     // ========== Multi-line pagers for multi-selection ==========
@@ -215,14 +279,14 @@ class CommentariesUseCase(
         lineIds: List<Long>,
         commentatorId: Long? = null,
     ): Flow<PagingData<CommentaryWithText>> =
-        cachedPager("comL:${lineIds.joinToString(",")}:${commentatorId ?: -1L}") {
+        cachedPager("comL:${lineIds.joinToString(",")}:${commentatorId ?: -1L}") { pagerScope ->
             val ids = commentatorId?.let { setOf(it) } ?: emptySet()
             Pager(
                 config = PagingDefaults.COMMENTS.config(placeholders = false),
                 pagingSourceFactory = {
                     MultiLineCommentsPagingSource(repository, lineIds, ids)
                 },
-            ).flow.cachedIn(scope)
+            ).flow.cachedIn(pagerScope)
         }
 
     /**
@@ -232,14 +296,14 @@ class CommentariesUseCase(
         lineIds: List<Long>,
         sourceBookId: Long? = null,
     ): Flow<PagingData<CommentaryWithText>> =
-        cachedPager("tgmL:${lineIds.joinToString(",")}:${sourceBookId ?: -1L}") {
+        cachedPager("tgmL:${lineIds.joinToString(",")}:${sourceBookId ?: -1L}") { pagerScope ->
             val ids = sourceBookId?.let { setOf(it) } ?: emptySet()
             Pager(
                 config = PagingDefaults.COMMENTS.config(placeholders = false),
                 pagingSourceFactory = {
                     MultiLineLinksPagingSource(repository, lineIds, ids, setOf(ConnectionType.TARGUM))
                 },
-            ).flow.cachedIn(scope)
+            ).flow.cachedIn(pagerScope)
         }
 
     /**
@@ -249,14 +313,14 @@ class CommentariesUseCase(
         lineIds: List<Long>,
         sourceBookId: Long? = null,
     ): Flow<PagingData<CommentaryWithText>> =
-        cachedPager("srcL:${lineIds.joinToString(",")}:${sourceBookId ?: -1L}") {
+        cachedPager("srcL:${lineIds.joinToString(",")}:${sourceBookId ?: -1L}") { pagerScope ->
             val ids = sourceBookId?.let { setOf(it) } ?: emptySet()
             Pager(
                 config = PagingDefaults.COMMENTS.config(placeholders = false),
                 pagingSourceFactory = {
                     MultiLineLinksPagingSource(repository, lineIds, ids, setOf(ConnectionType.SOURCE))
                 },
-            ).flow.cachedIn(scope)
+            ).flow.cachedIn(pagerScope)
         }
 
     /**
@@ -504,6 +568,7 @@ class CommentariesUseCase(
                 title.contains("על המשנה") ||
                 title.contains("על המשניות") ||
                 title.contains("על הש\"ס") ||
+                title.contains("על הש״ס") ||
                 title.contains("על השס")
             ) {
                 return title
@@ -680,7 +745,7 @@ class CommentariesUseCase(
 
         // Upper bound on memoized commentary/link/source pager flows (across all lines and
         // commentators visited in this book tab). Each retains its loaded pages, so keep it
-        // modest; the least-recently-used pager is evicted past this size.
+        // modest; past this size the least-recently-used pager is released once nothing shows it.
         const val MAX_CACHED_PAGERS = 32
 
         // Upper bound on cached commentator-group snapshots (one per base line). Snapshots are
