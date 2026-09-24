@@ -42,8 +42,14 @@ class DatabaseCleanupUseCase {
         ) : CleanupResult
     }
 
-    suspend fun cleanupDatabaseFiles(): CleanupResult =
+    /**
+     * @param keep files that must survive even if they look like install leftovers — e.g. the
+     *   `.tar.zst.part01/02` the user just picked for an offline update, which may live in the
+     *   databases directory and would otherwise be deleted before extraction reads them.
+     */
+    suspend fun cleanupDatabaseFiles(keep: Collection<File> = emptyList()): CleanupResult =
         withContext(Dispatchers.IO) {
+            val keepPaths = keep.mapNotNull { runCatching { it.canonicalPath }.getOrNull() }.toSet()
             val currentDbPath = AppSettings.getDatabasePath()
 
             // The old database is going away: forget the recorded path and the cached
@@ -65,6 +71,7 @@ class DatabaseCleanupUseCase {
                     val files = dir.takeIf { it.exists() }?.listFiles() ?: continue
                     for (file in files) {
                         if (!isDatabaseArtifact(file)) continue
+                        if (runCatching { file.canonicalPath }.getOrNull() in keepPaths) continue
                         val size = sizeOf(file)
                         if (deleteRecursively(file)) {
                             freed += size
