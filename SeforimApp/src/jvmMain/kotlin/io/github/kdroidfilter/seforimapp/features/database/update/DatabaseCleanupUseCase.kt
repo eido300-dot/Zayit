@@ -49,7 +49,6 @@ class DatabaseCleanupUseCase {
      */
     suspend fun cleanupDatabaseFiles(keep: Collection<File> = emptyList()): CleanupResult =
         withContext(Dispatchers.IO) {
-            val keepPaths = keep.mapNotNull { runCatching { it.canonicalPath }.getOrNull() }.toSet()
             val currentDbPath = AppSettings.getDatabasePath()
 
             // The old database is going away: forget the recorded path and the cached
@@ -63,41 +62,52 @@ class DatabaseCleanupUseCase {
             currentDbPath?.let { File(it).parentFile?.let(dirs::add) }
             runCatching { File(FileKit.databasesDir.path) }.getOrNull()?.let(dirs::add)
 
-            var freed = 0L
-            val undeletable = mutableListOf<File>()
+            val result = removeArtifacts(dirs, keep)
+            when (result) {
+                is CleanupResult.Success ->
+                    debugln { "[DatabaseCleanup] Removed previous database artifacts, freed ${result.freedBytes / (1024 * 1024)} MB" }
+                is CleanupResult.Incomplete -> {
+                    warnln {
+                        "[DatabaseCleanup] ${result.undeletable.size} file(s) could not be deleted (locked?): " +
+                            result.undeletable.joinToString { it.name }
+                    }
+                    PendingDbCleanup.record(result.undeletable)
+                }
+            }
+            result
+        }
 
-            try {
-                for (dir in dirs) {
-                    val files = dir.takeIf { it.exists() }?.listFiles() ?: continue
-                    for (file in files) {
-                        if (!isDatabaseArtifact(file)) continue
-                        if (runCatching { file.canonicalPath }.getOrNull() in keepPaths) continue
-                        val size = sizeOf(file)
-                        if (deleteRecursively(file)) {
-                            freed += size
-                        } else {
-                            undeletable += file
-                        }
+    /** Deletes the database artifacts directly inside [dirs], except the files in [keep]. */
+    internal fun removeArtifacts(
+        dirs: Collection<File>,
+        keep: Collection<File>,
+    ): CleanupResult {
+        val keepPaths = keep.mapNotNull { runCatching { it.canonicalPath }.getOrNull() }.toSet()
+        var freed = 0L
+        val undeletable = mutableListOf<File>()
+
+        try {
+            for (dir in dirs) {
+                val files = dir.takeIf { it.exists() }?.listFiles() ?: continue
+                for (file in files) {
+                    if (!isDatabaseArtifact(file)) continue
+                    if (runCatching { file.canonicalPath }.getOrNull() in keepPaths) continue
+                    val size = sizeOf(file)
+                    if (deleteRecursively(file)) {
+                        freed += size
+                    } else {
+                        undeletable += file
                     }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                warnln { "[DatabaseCleanup] Unexpected error during cleanup: ${e.message}" }
             }
-
-            if (undeletable.isEmpty()) {
-                debugln { "[DatabaseCleanup] Removed previous database artifacts, freed ${freed / (1024 * 1024)} MB" }
-                CleanupResult.Success(freed)
-            } else {
-                warnln {
-                    "[DatabaseCleanup] ${undeletable.size} file(s) could not be deleted (locked?): " +
-                        undeletable.joinToString { it.name }
-                }
-                PendingDbCleanup.record(undeletable)
-                CleanupResult.Incomplete(undeletable)
-            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            warnln { "[DatabaseCleanup] Unexpected error during cleanup: ${e.message}" }
         }
+
+        return if (undeletable.isEmpty()) CleanupResult.Success(freed) else CleanupResult.Incomplete(undeletable)
+    }
 
     /** True for files this app installs alongside the database and must remove on reinstall. */
     private fun isDatabaseArtifact(file: File): Boolean {
