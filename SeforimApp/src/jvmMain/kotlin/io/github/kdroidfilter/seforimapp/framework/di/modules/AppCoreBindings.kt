@@ -20,8 +20,8 @@ import io.github.kdroidfilter.seforimapp.db.UserSettingsDb
 import io.github.kdroidfilter.seforimapp.features.search.SearchHomeViewModel
 import io.github.kdroidfilter.seforimapp.framework.database.CatalogCache
 import io.github.kdroidfilter.seforimapp.framework.database.PersistentSqliteDriver
-import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.applyPendingUserSettingsImport
+import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.getUserSettingsDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.desktop.DesktopManager
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
