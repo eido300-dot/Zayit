@@ -100,7 +100,7 @@ The `SeforimLibrary` composite build provides the core functionality for Jewish 
 ### Tab System
 `TAB_SYSTEM_README.md` is outdated (it describes an LRU, `TabStateManager` and `TabAwareViewModel`, none of which exist). Key points:
 - Each tab owns its own `SimpleTabViewModelOwner` (ViewModel lifecycle), which stays alive while the tab exists
-- `TabsContent` keeps **every** open tab composed; only the selected tab is measured and drawn. Switching is instant, but RAM grows with the number of open tabs
+- `TabsContent` keeps the `MAX_LIVE_TABS` (5) most recently selected tabs alive: composed, with their ViewModels. Only the selected tab is measured and drawn. Older tabs are released (composition and ViewModels together) and restored from `TabPersistedStateStore` when selected again, like after a cold start. Never keep a tab's ViewModel alive while tearing down its composition: its pager re-collects from empty and the list visibly jumps
 - `TabPersistedStateStore` holds lightweight per-tab state (`get`/`update`/`remove` by `tabId`); `SessionManager` saves it to disk for cold-boot restoration
 - `TabsViewModel` manages tab lifecycle (create/select/close/replace)
 - A tab keeps its `tabId` (and so its ViewModels) across `replaceCurrentTabDestination`; use `replaceCurrentTabWithNewTabId` when the old ViewModels must not be reused (e.g. going Home)
@@ -170,7 +170,7 @@ The `SeforimLibrary` composite build provides the core functionality for Jewish 
 ### State Management
 - **Tab State**: Read and write `TabPersistedStateStore` by `tabId` for restoration
 - **Global State**: Avoid; prefer dependency injection and proper component lifecycle
-- **RAM**: every open tab stays composed (`TabsContent`); hidden tabs skip layout and draw but keep their ViewModels
+- **RAM**: bounded; at most `MAX_LIVE_TABS` (5) tabs are alive at once (`TabsContent`), however many are open
 
 ### Security & Configuration
 - **Secrets**: Never commit to repository; use `local.properties` for machine-specific settings
@@ -214,7 +214,7 @@ persistedStore.update(tabId) { current ->
 
 ### Performance
 - **Hot Reload**: Use `hotRunJvm` + `reload` for fast iteration
-- **Memory**: grows with open tabs, since every tab stays composed (see Tab System)
+- **Memory**: bounded by `MAX_LIVE_TABS` in `TabsContent` (see Tab System)
 - **Large Datasets**: Leverage Paging 3 for efficient data loading
 
 ## File Locations Reference
