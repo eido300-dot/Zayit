@@ -16,39 +16,26 @@ class MultiLineLinksPagingSource(
     private val sourceBookIds: Set<Long> = emptySet(),
     private val connectionTypes: Set<ConnectionType> = setOf(ConnectionType.TARGUM),
 ) : PagingSource<Int, CommentaryWithText>() {
-    override fun getRefreshKey(state: PagingState<Int, CommentaryWithText>): Int? =
-        state.anchorPosition?.let { anchorPosition ->
-            val anchorPage = state.closestPageToPosition(anchorPosition)
-            anchorPage?.prevKey?.plus(1) ?: anchorPage?.nextKey?.minus(1)
-        }
+    override fun getRefreshKey(state: PagingState<Int, CommentaryWithText>): Int? = state.offsetRefreshKey()
 
     override suspend fun load(params: LoadParams<Int>): LoadResult<Int, CommentaryWithText> =
         try {
-            val page = params.key ?: 0
-            val limit = params.loadSize
-            val offset = page * limit
+            val window = params.offsetWindow()
 
             val links =
                 repository.getCommentariesForLineRange(
                     lineIds = lineIds,
                     activeCommentatorIds = sourceBookIds,
                     connectionTypes = connectionTypes,
-                    offset = offset,
-                    limit = limit,
+                    offset = window.offset,
+                    limit = window.limit,
                     // Dedup source lines that cite multiple target lines in the
                     // selection. Otherwise a single sugya referenced by multiple
                     // halakhot in a TOC heading appears N times in the panel.
                     distinctByTargetLine = lineIds.size > 1,
                 )
 
-            val prevKey = if (page == 0) null else page - 1
-            val nextKey = if (links.isEmpty()) null else page + 1
-
-            LoadResult.Page(
-                data = links,
-                prevKey = prevKey,
-                nextKey = nextKey,
-            )
+            window.toPage(links)
         } catch (e: Exception) {
             LoadResult.Error(e)
         }
