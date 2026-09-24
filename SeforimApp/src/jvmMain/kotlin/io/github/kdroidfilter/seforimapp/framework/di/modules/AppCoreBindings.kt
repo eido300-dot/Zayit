@@ -21,6 +21,7 @@ import io.github.kdroidfilter.seforimapp.features.search.SearchHomeViewModel
 import io.github.kdroidfilter.seforimapp.framework.database.CatalogCache
 import io.github.kdroidfilter.seforimapp.framework.database.PersistentSqliteDriver
 import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
+import io.github.kdroidfilter.seforimapp.framework.database.applyPendingUserSettingsImport
 import io.github.kdroidfilter.seforimapp.framework.database.getUserSettingsDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.desktop.DesktopManager
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
@@ -69,6 +70,8 @@ object AppCoreBindings {
         // read-only books DB). All user stores inject this instance instead of
         // opening their own driver. New tables are added transparently for
         // existing users via CREATE TABLE IF NOT EXISTS in Schema.create().
+        // A backup imported from Settings is staged and swapped in here, before the file is opened.
+        runCatching { applyPendingUserSettingsImport() }
         val driver = JdbcSqliteDriver("jdbc:sqlite:${getUserSettingsDatabasePath()}")
         UserSettingsDb.Schema.create(driver)
         return UserSettingsDb(driver)
