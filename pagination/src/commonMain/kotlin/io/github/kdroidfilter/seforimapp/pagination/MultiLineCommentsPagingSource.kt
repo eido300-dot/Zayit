@@ -10,35 +10,22 @@ class MultiLineCommentsPagingSource(
     private val lineIds: List<Long>,
     private val commentatorIds: Set<Long> = emptySet(),
 ) : PagingSource<Int, CommentaryWithText>() {
-    override fun getRefreshKey(state: PagingState<Int, CommentaryWithText>): Int? =
-        state.anchorPosition?.let { anchorPosition ->
-            val anchorPage = state.closestPageToPosition(anchorPosition)
-            anchorPage?.prevKey?.plus(1) ?: anchorPage?.nextKey?.minus(1)
-        }
+    override fun getRefreshKey(state: PagingState<Int, CommentaryWithText>): Int? = state.offsetRefreshKey()
 
     override suspend fun load(params: LoadParams<Int>): LoadResult<Int, CommentaryWithText> =
         try {
-            val page = params.key ?: 0
-            val limit = params.loadSize
-            val offset = page * limit
+            val window = params.offsetWindow()
 
             val commentaries =
                 repository.getCommentariesForLineRange(
                     lineIds = lineIds,
                     activeCommentatorIds = commentatorIds,
                     connectionTypes = setOf(io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.COMMENTARY),
-                    offset = offset,
-                    limit = limit,
+                    offset = window.offset,
+                    limit = window.limit,
                 )
 
-            val prevKey = if (page == 0) null else page - 1
-            val nextKey = if (commentaries.isEmpty()) null else page + 1
-
-            LoadResult.Page(
-                data = commentaries,
-                prevKey = prevKey,
-                nextKey = nextKey,
-            )
+            window.toPage(commentaries)
         } catch (e: Exception) {
             LoadResult.Error(e)
         }

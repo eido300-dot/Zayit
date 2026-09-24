@@ -126,7 +126,12 @@ jobs:
 
       # Build
       - name: Build
-        run: ./gradlew ${{ matrix.build_task }} --no-daemon
+        run: |
+          # setup-nucleus appends the JBR bin dir to PATH from PowerShell, where "`b" is a backspace,
+          # so on Windows PATH gets an entry "...<BS>in". GraalVM native-image scans PATH for cl.exe
+          # and fails with InvalidPathException on it. Drop entries containing a backspace.
+          export PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v $'\b' | paste -sd ':' -)"
+          ./gradlew ${{ matrix.build_task }} --no-daemon
         shell: bash
 
       # Build Rust installer for Windows

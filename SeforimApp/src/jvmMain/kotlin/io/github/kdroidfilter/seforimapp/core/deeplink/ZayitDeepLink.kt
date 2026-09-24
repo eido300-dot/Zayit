@@ -72,7 +72,9 @@ fun parseZayitDeepLink(uri: String): TabsDestination? {
         HOST_SEARCH -> {
             val encoded = path.substringAfter("$HOST_SEARCH/", "")
             if (encoded.isEmpty()) return null
-            TabsDestination.Search(searchQuery = URLDecoder.decode(encoded, StandardCharsets.UTF_8), tabId = newTabId)
+            // A malformed %-escape (e.g. "100%") makes URLDecoder throw; treat it as an invalid link.
+            val query = runCatching { URLDecoder.decode(encoded, StandardCharsets.UTF_8) }.getOrNull() ?: return null
+            TabsDestination.Search(searchQuery = query, tabId = newTabId)
         }
         else -> null
     }
