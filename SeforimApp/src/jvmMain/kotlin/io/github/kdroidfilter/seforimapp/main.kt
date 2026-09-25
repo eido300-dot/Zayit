@@ -21,6 +21,7 @@ import com.kdroid.gematria.converter.toHebrewNumeral
 import dev.nucleusframework.application.aotTraining
 import dev.nucleusframework.application.nucleusApplication
 import dev.nucleusframework.core.runtime.NucleusApp
+import dev.nucleusframework.core.runtime.SingleInstanceManager
 import dev.nucleusframework.energymanager.EnergyManager
 import dev.nucleusframework.window.jewel.JewelDecoratedWindow
 import dev.zacsweers.metro.createGraph
@@ -44,6 +45,7 @@ import io.github.kdroidfilter.seforimapp.core.presentation.utils.detectTouchMode
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.processKeyShortcuts
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.rememberWindowViewModelStoreOwner
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindow
@@ -56,6 +58,8 @@ import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.di.AppGraph
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
 import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
+import io.github.kdroidfilter.seforimapp.framework.portable.lockIdentifierFor
 import io.github.kdroidfilter.seforimapp.framework.session.SessionManager
 import io.github.kdroidfilter.seforimapp.logger.infoln
 import io.github.kdroidfilter.seforimapp.logger.isDevEnv
@@ -148,6 +152,14 @@ fun main(args: Array<String>) {
 //    DbDeltaRecoveryBootstrap.runOnce()
 
     val appId = "io.github.kdroidfilter.seforimapp"
+    val portableLayout = PortableEnvironment.layout
+    if (portableLayout != null) {
+        // A separate lock, so a portable copy started while an installed Zayit runs opens its own
+        // window instead of handing over to the installed one, which shows the host's data.
+        // Must be set before nucleusApplication acquires the lock.
+        SingleInstanceManager.configuration =
+            SingleInstanceManager.Configuration(lockIdentifier = lockIdentifierFor(appId, portableLayout.dataDir))
+    }
 
     nucleusApplication(
         args,
@@ -155,7 +167,8 @@ fun main(args: Array<String>) {
     ) {
         aotTraining(duration = AOT_TRAINING_DURATION)
 
-        FileKit.init(appId)
+        // Portable: all app data goes to zayit-data on the drive (databasesDir = zayit-data/databases).
+        FileKit.init(appId, filesDir = portableLayout?.filesDir?.toFile(), cacheDir = portableLayout?.cacheDir?.toFile())
 
         // Retry any database cleanup a previous run could not finish (e.g. a file locked
         // by antivirus/Windows Search). Runs once, before the SQLDelight repository opens
@@ -308,6 +321,7 @@ fun main(args: Array<String>) {
                             settingsWindowViewModel = settingsWindowViewModel,
                             onQuit = {
                                 SessionManager.saveIfEnabled(appGraph)
+                                AppSettingsStore.flushIfPortable()
                                 appGraph.appUpdateService.installPendingOnClose()
                                 exitApplication()
                             },
@@ -386,6 +400,7 @@ fun main(args: Array<String>) {
                             // installPendingOnClose() launches the installer and exits the process
                             // itself when a silent (Win/Mac PATCH) update is ready.
                             SessionManager.saveIfEnabled(appGraph)
+                            AppSettingsStore.flushIfPortable()
                             appGraph.appUpdateService.installPendingOnClose()
                             exitApplication()
                         },

@@ -7,6 +7,7 @@ import dev.zacsweers.metro.Inject
 import dev.zacsweers.metrox.viewmodel.ViewModelKey
 import io.github.kdroidfilter.platformtools.appmanager.restartApplication
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.framework.database.getUserSettingsDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.isSqliteDatabase
 import io.github.kdroidfilter.seforimapp.framework.database.pendingUserSettingsImportFile
@@ -91,6 +92,8 @@ class DataSettingsViewModel : ViewModel() {
                 }
 
                 _state.update { it.copy(isImporting = false, importSucceeded = true) }
+                // The new instance reads the settings file; pending changes must be on disk first.
+                AppSettingsStore.flushIfPortable()
                 restartApplication()
             } catch (e: Exception) {
                 _state.update { it.copy(isImporting = false, importFailed = true) }
@@ -143,6 +146,7 @@ class DataSettingsViewModel : ViewModel() {
             }
 
             _state.update { it.copy(resetDone = true) }
+            AppSettingsStore.flushIfPortable()
             restartApplication()
         }
     }
