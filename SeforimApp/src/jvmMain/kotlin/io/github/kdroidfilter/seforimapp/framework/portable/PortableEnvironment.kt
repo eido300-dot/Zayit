@@ -2,6 +2,7 @@ package io.github.kdroidfilter.seforimapp.framework.portable
 
 import io.github.kdroidfilter.seforimapp.framework.platform.currentExecutablePath
 import io.github.kdroidfilter.seforimapp.logger.infoln
+import java.nio.file.Path
 
 /**
  * Process-wide portable-mode decision.
@@ -24,6 +25,12 @@ object PortableEnvironment {
 
     /** True when all app data and settings live next to the program. */
     val isPortable: Boolean get() = layout != null
+
+    /**
+     * Whether the app may delete files in [dir]: always in a normal installation; in portable mode
+     * only when [dir] really lies inside the data folder, not behind a link on the drive.
+     */
+    fun mayCleanUp(dir: Path): Boolean = layout?.let { isReallyInside(dir, it.dataDir) } ?: true
 
     private fun readOverride(): String? =
         (System.getenv(PORTABLE_DATA_DIR_OVERRIDE) ?: System.getProperty(PORTABLE_DATA_DIR_OVERRIDE))

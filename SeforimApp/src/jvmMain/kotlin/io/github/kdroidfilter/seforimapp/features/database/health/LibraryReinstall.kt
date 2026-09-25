@@ -2,6 +2,7 @@ package io.github.kdroidfilter.seforimapp.features.database.health
 
 import io.github.kdroidfilter.platformtools.appmanager.restartApplication
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
 import io.github.kdroidfilter.seforimapp.framework.database.encodeProblems
 import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
@@ -26,8 +27,9 @@ suspend fun requestLibraryReinstall(problems: List<LibraryProblem>) {
     withContext(Dispatchers.IO) {
         AppSettings.setReinstallRequest(encodeProblems(problems))
         AppSettings.setLastReinstallMarker(reinstallMarker(problems, installedDatabase()?.let(::modifiedTime)))
+        // The new process starts before this one exits and must read the request.
+        AppSettingsStore.flushIfPortable()
         try {
-            // The new process starts before this one exits and must read the request.
             Preferences.userRoot().flush()
         } catch (_: BackingStoreException) {
             // The shutdown hook still saves it; at worst the banner shows once more.

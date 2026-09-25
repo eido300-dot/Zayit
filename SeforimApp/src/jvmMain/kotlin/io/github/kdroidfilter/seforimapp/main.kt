@@ -21,6 +21,7 @@ import com.kdroid.gematria.converter.toHebrewNumeral
 import dev.nucleusframework.application.aotTraining
 import dev.nucleusframework.application.nucleusApplication
 import dev.nucleusframework.core.runtime.NucleusApp
+import dev.nucleusframework.core.runtime.SingleInstanceManager
 import dev.nucleusframework.energymanager.EnergyManager
 import dev.nucleusframework.window.jewel.JewelDecoratedWindow
 import dev.zacsweers.metro.createGraph
@@ -45,6 +46,7 @@ import io.github.kdroidfilter.seforimapp.core.presentation.utils.detectTouchMode
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.processKeyShortcuts
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.rememberWindowViewModelStoreOwner
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryCheckWindow
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryDegradedLayout
 import io.github.kdroidfilter.seforimapp.features.database.health.reinstallStillHelps
@@ -71,6 +73,9 @@ import io.github.kdroidfilter.seforimapp.framework.database.routeStartup
 import io.github.kdroidfilter.seforimapp.framework.di.AppGraph
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
 import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
+import io.github.kdroidfilter.seforimapp.framework.portable.keepPortableReportsAnonymous
+import io.github.kdroidfilter.seforimapp.framework.portable.lockIdentifierFor
 import io.github.kdroidfilter.seforimapp.framework.session.SessionManager
 import io.github.kdroidfilter.seforimapp.logger.errorln
 import io.github.kdroidfilter.seforimapp.logger.infoln
@@ -161,6 +166,9 @@ private fun initializeSentry() {
         options.environment = sentryEnvironment
         options.release = NucleusApp.version
         options.isDebug = isDevEnv
+        PortableEnvironment.layout?.let { layout ->
+            keepPortableReportsAnonymous(options, layout.dataDir.toString(), System.getProperty("user.home"))
+        }
     }
     infoln { "Sentry initialized for environment '$sentryEnvironment'." }
 }
@@ -185,6 +193,14 @@ fun main(args: Array<String>) {
 //    DbDeltaRecoveryBootstrap.runOnce()
 
     val appId = "io.github.kdroidfilter.seforimapp"
+    val portableLayout = PortableEnvironment.layout
+    if (portableLayout != null) {
+        // A separate lock, so a portable copy started while an installed Zayit runs opens its own
+        // window instead of handing over to the installed one, which shows the host's data.
+        // Must be set before nucleusApplication acquires the lock.
+        SingleInstanceManager.configuration =
+            SingleInstanceManager.Configuration(lockIdentifier = lockIdentifierFor(appId, portableLayout.dataDir))
+    }
 
     nucleusApplication(
         args,
@@ -192,7 +208,8 @@ fun main(args: Array<String>) {
     ) {
         aotTraining(duration = AOT_TRAINING_DURATION)
 
-        FileKit.init(appId)
+        // Portable: all app data goes to zayit-data on the drive (databasesDir = zayit-data/databases).
+        FileKit.init(appId, filesDir = portableLayout?.filesDir?.toFile(), cacheDir = portableLayout?.cacheDir?.toFile())
 
         val windowState =
             rememberWindowState(
@@ -365,6 +382,7 @@ fun main(args: Array<String>) {
                             settingsWindowViewModel = settingsWindowViewModel,
                             onQuit = {
                                 SessionManager.saveIfEnabled(appGraph)
+                                AppSettingsStore.flushIfPortable()
                                 appGraph.appUpdateService.installPendingOnClose()
                                 exitApplication()
                             },
@@ -443,6 +461,7 @@ fun main(args: Array<String>) {
                             // installPendingOnClose() launches the installer and exits the process
                             // itself when a silent (Win/Mac PATCH) update is ready.
                             SessionManager.saveIfEnabled(appGraph)
+                            AppSettingsStore.flushIfPortable()
                             appGraph.appUpdateService.installPendingOnClose()
                             exitApplication()
                         },

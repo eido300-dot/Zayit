@@ -15,6 +15,7 @@ import io.github.kdroidfilter.seforimapp.core.annotations.NoteStore
 import io.github.kdroidfilter.seforimapp.core.catalog.CatalogAccess
 import io.github.kdroidfilter.seforimapp.core.selection.DefaultSelectionContext
 import io.github.kdroidfilter.seforimapp.core.selection.SelectionContext
+import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.core.settings.CategoryDisplaySettingsStore
 import io.github.kdroidfilter.seforimapp.db.UserSettingsDb
 import io.github.kdroidfilter.seforimapp.features.search.SearchHomeViewModel
@@ -61,7 +62,7 @@ object AppCoreBindings {
 
     @Provides
     @SingleIn(AppScope::class)
-    fun provideSettings(): Settings = Settings()
+    fun provideSettings(): Settings = AppSettingsStore.settings
 
     @Provides
     @SingleIn(AppScope::class)
