@@ -5,11 +5,10 @@ import androidx.lifecycle.viewModelScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metrox.viewmodel.ViewModelKey
-import io.github.kdroidfilter.platformtools.appmanager.restartApplication
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
-import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.framework.database.getUserSettingsDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
+import io.github.kdroidfilter.seforimapp.framework.platform.restartApp
 import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.kdroidfilter.seforimapp.framework.portable.deleteTree
 import io.github.vinceglb.filekit.FileKit
@@ -89,9 +88,7 @@ class DataSettingsViewModel : ViewModel() {
 
                 // The running app holds an open connection to the old DB; restart to load the imported one.
                 _state.update { it.copy(isImporting = false, importSucceeded = true) }
-                // The new instance reads the settings file; pending changes must be on disk first.
-                AppSettingsStore.flushIfPortable()
-                restartApplication()
+                restartApp()
             } catch (e: Exception) {
                 _state.update { it.copy(isImporting = false, importFailed = true) }
             }
@@ -139,8 +136,7 @@ class DataSettingsViewModel : ViewModel() {
             }
 
             _state.update { it.copy(resetDone = true) }
-            AppSettingsStore.flushIfPortable()
-            restartApplication()
+            restartApp()
         }
     }
 }

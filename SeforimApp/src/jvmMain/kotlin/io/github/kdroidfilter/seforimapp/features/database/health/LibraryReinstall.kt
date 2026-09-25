@@ -1,13 +1,12 @@
 package io.github.kdroidfilter.seforimapp.features.database.health
 
-import io.github.kdroidfilter.platformtools.appmanager.restartApplication
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
-import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
 import io.github.kdroidfilter.seforimapp.framework.database.encodeProblems
 import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.isRepeatedAfterReinstall
 import io.github.kdroidfilter.seforimapp.framework.database.reinstallMarker
+import io.github.kdroidfilter.seforimapp.framework.platform.restartApp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -27,17 +26,16 @@ suspend fun requestLibraryReinstall(problems: List<LibraryProblem>) {
     withContext(Dispatchers.IO) {
         AppSettings.setReinstallRequest(encodeProblems(problems))
         AppSettings.setLastReinstallMarker(reinstallMarker(problems, installedDatabase()?.let(::modifiedTime)))
-        // The new process starts before this one exits and must read the request.
-        AppSettingsStore.flushIfPortable()
         try {
+            // The new process starts before this one exits and must read the request.
             Preferences.userRoot().flush()
         } catch (_: BackingStoreException) {
             // The shutdown hook still saves it; at worst the banner shows once more.
         }
-        restartApplication()
-        // platformtools' restartApplication exits the process once the new one has started, and
-        // returns only when it could not start it: forget the request, or the next launch would
-        // reinstall the library unasked.
+        // Saves the portable settings and leaves a restart note (see restartApp).
+        restartApp()
+        // restartApp returns only when no new process was started: forget the request, or the next
+        // launch would reinstall the library unasked.
         AppSettings.setReinstallRequest(null)
     }
 }

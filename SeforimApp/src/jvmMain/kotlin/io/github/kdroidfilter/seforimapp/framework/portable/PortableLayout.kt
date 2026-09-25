@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimapp.framework.portable
 
 import io.github.kdroidfilter.seforimapp.logger.warnln
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.InvalidPathException
 import java.nio.file.Path
@@ -35,7 +36,7 @@ data class PortableLayout(
  * Returns the `X.app` bundle when [executable] has the macOS layout `X.app/Contents/MacOS/exe`.
  * Detection is by path shape, not by name, because the shipped bundle name is localized.
  */
-fun appBundleOf(executable: Path): Path? {
+internal fun appBundleOf(executable: Path): Path? {
     val macOsDir = executable.parent ?: return null
     val contentsDir = macOsDir.parent ?: return null
     val bundle = contentsDir.parent ?: return null
@@ -47,7 +48,7 @@ fun appBundleOf(executable: Path): Path? {
 }
 
 /** The folder that holds the program and, in portable mode, its [PORTABLE_DATA_DIR_NAME] sibling. */
-fun containerOf(executable: Path): Path? = appBundleOf(executable)?.parent ?: executable.parent
+internal fun containerOf(executable: Path): Path? = appBundleOf(executable)?.parent ?: executable.parent
 
 /**
  * Resolves the portable layout, or `null` for a normal (host) installation.
@@ -56,7 +57,7 @@ fun containerOf(executable: Path): Path? = appBundleOf(executable)?.parent ?: ex
  * set, replaces the location next to [executable] but still requires the marker. Never throws:
  * an unusable override is logged and treated as host mode.
  */
-fun resolvePortableLayout(
+internal fun resolvePortableLayout(
     executable: Path?,
     override: String?,
     isFile: (Path) -> Boolean = Files::isRegularFile,
@@ -87,18 +88,19 @@ private fun dataDirFor(
  * portable copy started while the installed app runs opens its own window instead of handing
  * over to the installed one (which would show host data).
  */
-fun lockIdentifierFor(
+internal fun lockIdentifierFor(
     appId: String,
     dataDir: Path,
 ): String {
+    // The real path, so a symlink or another spelling of the same folder gives the same lock.
+    val canonical =
+        try {
+            dataDir.toRealPath()
+        } catch (_: IOException) {
+            dataDir.toAbsolutePath().normalize()
+        }
     val crc = CRC32()
-    crc.update(
-        dataDir
-            .toAbsolutePath()
-            .normalize()
-            .toString()
-            .toByteArray(Charsets.UTF_8),
-    )
+    crc.update(canonical.toString().toByteArray(Charsets.UTF_8))
     return "$appId-portable-" +
         java.lang.Long
             .toHexString(crc.value)

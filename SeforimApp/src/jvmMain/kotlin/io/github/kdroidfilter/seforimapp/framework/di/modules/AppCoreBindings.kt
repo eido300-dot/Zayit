@@ -26,7 +26,9 @@ import io.github.kdroidfilter.seforimapp.framework.database.getUserSettingsDatab
 import io.github.kdroidfilter.seforimapp.framework.database.libraryFilesFor
 import io.github.kdroidfilter.seforimapp.framework.desktop.DesktopManager
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.kdroidfilter.seforimapp.framework.search.AcronymFrequencyCache
+import io.github.kdroidfilter.seforimapp.framework.search.DriveSafeSearchEngine
 import io.github.kdroidfilter.seforimapp.framework.search.LuceneLookupSearchService
 import io.github.kdroidfilter.seforimapp.framework.search.RepositorySnippetSourceProvider
 import io.github.kdroidfilter.seforimapp.framework.session.TabPersistedStateStore
@@ -96,7 +98,9 @@ object AppCoreBindings {
         // read-tuning PRAGMAs. Replaces `JdbcSqliteDriver` whose ThreadedConnectionManager
         // closes the SQLite connection after every non-transactional query (confirmed by
         // JFR 2026-04-23: ~70 `NativeDB.prepare_utf8` + `NativeDB._close()` pairs / 20 s).
-        val driver = PersistentSqliteDriver("jdbc:sqlite:$dbPath")
+        // On a portable drive the driver swaps the repository's WAL and 512 MB mmap tuning for
+        // settings that cannot kill the process when the drive is unplugged (see removableDriveSql).
+        val driver = PersistentSqliteDriver("jdbc:sqlite:$dbPath", removableDrive = PortableEnvironment.isPortable)
         return SeforimRepository(dbPath, driver)
     }
 
@@ -105,7 +109,9 @@ object AppCoreBindings {
     fun provideSearchEngine(repository: SeforimRepository): SearchEngine {
         val files = libraryFilesFor(Paths.get(getDatabasePath()))
         val snippetProvider = RepositorySnippetSourceProvider(repository)
-        return LuceneSearchEngine(files.textIndex, snippetProvider, dictionaryPath = files.dictionary)
+        val engine = LuceneSearchEngine(files.textIndex, snippetProvider, dictionaryPath = files.dictionary)
+        // The index is memory-mapped on the JVM; a drive unplugged mid-search fails as an InternalError.
+        return if (PortableEnvironment.isPortable) DriveSafeSearchEngine(engine) else engine
     }
 
     @Provides
@@ -116,7 +122,7 @@ object AppCoreBindings {
     @SingleIn(AppScope::class)
     fun provideLuceneLookupSearchService(acronymCache: AcronymFrequencyCache): LuceneLookupSearchService {
         val files = libraryFilesFor(Paths.get(getDatabasePath()))
-        return LuceneLookupSearchService(files.lookupIndex, acronymCache = acronymCache)
+        return LuceneLookupSearchService(files.lookupIndex, acronymCache = acronymCache, memoryMapped = !PortableEnvironment.isPortable)
     }
 
     @Provides

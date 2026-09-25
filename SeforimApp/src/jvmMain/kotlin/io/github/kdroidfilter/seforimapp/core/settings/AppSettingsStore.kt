@@ -22,6 +22,13 @@ import java.util.Properties
  * Must not reference [AppSettings], `DatabaseUtils` or `MainAppState`.
  */
 object AppSettingsStore {
+    /**
+     * Set by `main()` before the settings are first read. False when another process holds the
+     * drive: this copy then only shows a message and must not write the file the other one owns.
+     */
+    @Volatile
+    var writesAllowed: Boolean = true
+
     private val portableStore: PortableSettingsStore? by lazy {
         PortableEnvironment.layout?.let(::openPortableStore)
     }
@@ -43,7 +50,8 @@ object AppSettingsStore {
     }
 
     private fun openPortableStore(layout: PortableLayout): PortableSettingsStore {
-        val store = PortableSettingsStore.open(layout.settingsFile)
+        val store = PortableSettingsStore.open(layout.settingsFile, readOnly = !writesAllowed)
+        if (store.isReadOnly) return store
         try {
             // Best effort only: hooks do not run on a Windows logoff or a forced kill. Settings are
             // written as soon as they change, which is the real protection.

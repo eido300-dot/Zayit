@@ -53,6 +53,7 @@ import io.github.kdroidfilter.seforimapp.features.database.health.reinstallStill
 import io.github.kdroidfilter.seforimapp.features.database.health.requestLibraryReinstall
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
+import io.github.kdroidfilter.seforimapp.features.portable.DriveInUseWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowEvents
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowViewModel
@@ -73,6 +74,7 @@ import io.github.kdroidfilter.seforimapp.framework.database.routeStartup
 import io.github.kdroidfilter.seforimapp.framework.di.AppGraph
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
 import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
+import io.github.kdroidfilter.seforimapp.framework.portable.DriveLock
 import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.kdroidfilter.seforimapp.framework.portable.keepPortableReportsAnonymous
 import io.github.kdroidfilter.seforimapp.framework.portable.lockIdentifierFor
@@ -201,6 +203,10 @@ fun main(args: Array<String>) {
         SingleInstanceManager.configuration =
             SingleInstanceManager.Configuration(lockIdentifier = lockIdentifierFor(appId, portableLayout.dataDir))
     }
+    val driveLock = portableLayout?.let { DriveLock.acquireForProcess(it.dataDir) }
+    val driveInUse = driveLock is DriveLock.Result.InUse
+    // Before anything reads the settings: this copy only shows a message and leaves the file alone.
+    AppSettingsStore.writesAllowed = !driveInUse
 
     nucleusApplication(
         args,
@@ -301,15 +307,18 @@ fun main(args: Array<String>) {
         // Startup routing reads settings, the database header and the index metadata. On a slow
         // or network drive that can take seconds, so it runs off the UI thread while
         // LibraryCheckWindow stands in (hidden unless it takes long). It is null until known.
-        var startupRoute by remember { mutableStateOf<StartupRoute?>(null) }
+        // A copy that found the drive in use only shows DriveInUseWindow and must write nothing.
+        var startupRoute by remember { mutableStateOf<StartupRoute?>(if (driveInUse) StartupRoute.Main(emptyList()) else null) }
         LaunchedEffect(Unit) {
-            startupRoute =
-                withContext(Dispatchers.IO) {
-                    // Retry any database cleanup a previous run could not finish (e.g. a file
-                    // locked by antivirus/Windows Search), before the repository opens the DB.
-                    PendingDbCleanup.runOnce()
-                    computeStartupRoute()
-                }
+            if (startupRoute == null) {
+                startupRoute =
+                    withContext(Dispatchers.IO) {
+                        // Retry any database cleanup a previous run could not finish (e.g. a file
+                        // locked by antivirus/Windows Search), before the repository opens the DB.
+                        PendingDbCleanup.runOnce()
+                        computeStartupRoute()
+                    }
+            }
         }
         val startsWithOnboarding = startupRoute is StartupRoute.Onboarding
         val showOnboardingFromState by mainAppState.showOnBoarding.collectAsState()
@@ -353,7 +362,9 @@ fun main(args: Array<String>) {
                 theme = themeDefinition,
                 styling = componentStyling,
             ) {
-                if (startupRoute == null) {
+                if (driveInUse) {
+                    DriveInUseWindow()
+                } else if (startupRoute == null) {
                     LibraryCheckWindow()
                 } else if (showOnboarding) {
                     OnBoardingWindow()

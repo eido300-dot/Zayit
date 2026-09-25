@@ -23,11 +23,14 @@ class LuceneLookupSearchService(
     indexDir: Path,
     private val analyzer: Analyzer = StandardAnalyzer(),
     private val acronymCache: AcronymFrequencyCache? = null,
+    // False on a removable drive: unplugging it while a mapped page is read kills the process
+    // (SIGBUS), where plain reads only throw an IOException.
+    private val memoryMapped: Boolean = true,
 ) {
     // Open Lucene directory lazily to avoid any I/O at app startup.
     // GraalVM native image does not support MMapDirectory (Panama foreign downcalls), use NIOFSDirectory instead.
     private val dir by lazy {
-        if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
+        if (!memoryMapped || System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
             NIOFSDirectory(indexDir)
         } else {
             FSDirectory.open(indexDir)

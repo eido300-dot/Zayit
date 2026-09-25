@@ -30,6 +30,18 @@ class PortableSettingsStoreTest {
         )
 
     @Test
+    fun `a read-only store keeps changes in memory and writes nothing`() {
+        val store = PortableSettingsStore.open(settingsFile, Executors.newSingleThreadExecutor().also { executors += it }, readOnly = true)
+
+        store.settings.putString("name", "value")
+
+        assertTrue(store.isReadOnly)
+        assertTrue(store.flush())
+        assertEquals("value", store.settings.getString("name", ""))
+        assertFalse(Files.exists(settingsFile))
+    }
+
+    @Test
     fun `values written through settings survive a reopen`() {
         val first = open()
         first.settings.putString("name", "value")

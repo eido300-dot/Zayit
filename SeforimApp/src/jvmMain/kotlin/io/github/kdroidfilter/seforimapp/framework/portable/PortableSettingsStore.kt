@@ -34,10 +34,11 @@ class PortableSettingsStore private constructor(
         writer?.runExclusive(timeoutMillis) { file.resetFiles() } ?: true
 
     companion object {
-        /** Opens the store backed by [settingsFile]. Never throws. */
+        /** Opens the store backed by [settingsFile]; with [readOnly], changes stay in memory. Never throws. */
         fun open(
             settingsFile: Path,
             executor: Executor = SettingsWriter.newWriterExecutor(),
+            readOnly: Boolean = false,
         ): PortableSettingsStore {
             val file = PortableSettingsFile(settingsFile)
             val result = file.load()
@@ -49,16 +50,20 @@ class PortableSettingsStore private constructor(
                     LoadResult.Corrupt -> Properties()
                 }
             val writer =
-                when (result) {
-                    is LoadResult.IoError -> {
-                        errorln(result.cause) { "[portable] settings unreadable; running without saving" }
-                        null
+                if (readOnly) {
+                    null
+                } else {
+                    when (result) {
+                        is LoadResult.IoError -> {
+                            errorln(result.cause) { "[portable] settings unreadable; running without saving" }
+                            null
+                        }
+                        LoadResult.Corrupt -> {
+                            warnln { "[portable] settings damaged; starting from defaults" }
+                            SettingsWriter(save = file::save, executor = executor)
+                        }
+                        is LoadResult.Loaded -> SettingsWriter(save = file::save, executor = executor)
                     }
-                    LoadResult.Corrupt -> {
-                        warnln { "[portable] settings damaged; starting from defaults" }
-                        SettingsWriter(save = file::save, executor = executor)
-                    }
-                    is LoadResult.Loaded -> SettingsWriter(save = file::save, executor = executor)
                 }
             val backing = PropertiesSettings(initial) { properties -> writer?.markDirty(properties) }
             return PortableSettingsStore(LenientSettings(backing), result, file, writer)

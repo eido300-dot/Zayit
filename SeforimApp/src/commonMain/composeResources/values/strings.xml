@@ -626,4 +626,8 @@
     <string name="library_check_title">בודק את הספרייה</string>
     <string name="library_check_message">זית בודק את קבצי הספרייה. בכונן איטי או בכונן רשת זה יכול לקחת כמה שניות. אם זה נמשך הרבה זמן, ייתכן שהכונן לא מגיב: סגרו, חברו אותו מחדש ונסו שוב.</string>
     <string name="library_check_close">סגירה</string>
+    <!-- Portable drive already in use -->
+    <string name="drive_in_use_title">זית כבר פתוח מהכונן הזה</string>
+    <string name="drive_in_use_message">עותק אחר של זית משתמש כבר בתיקיית הנתונים של הכונן, במחשב הזה או במחשב אחר. סגרו אותו ונסו שוב. פתיחה כפולה הייתה עלולה להרוס את ההערות וההגדרות.</string>
+    <string name="drive_in_use_close">סגירה</string>
 </resources>
