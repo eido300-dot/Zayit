@@ -605,4 +605,21 @@
     <string name="menu_window">חלון</string>
     <string name="menu_help">עזרה</string>
 
+    <!-- Library health check at startup -->
+    <string name="library_problem_database_missing">קובץ הספרייה (seforim.db) חסר</string>
+    <string name="library_problem_database_not_sqlite">קובץ הספרייה אינו מסד נתונים תקין</string>
+    <string name="library_problem_database_truncated">קובץ הספרייה קטוע: ההעתקה או ההורדה לא הושלמה</string>
+    <string name="library_problem_database_empty">קובץ הספרייה ריק</string>
+    <string name="library_problem_database_unreadable">לא ניתן לקרוא את קובץ הספרייה</string>
+    <string name="library_problem_catalog_missing">קטלוג הספרים (catalog.pb) חסר</string>
+    <string name="library_problem_text_index_missing">אינדקס החיפוש חסר או חלקי</string>
+    <string name="library_problem_lookup_index_missing">אינדקס ההשלמה בחיפוש חסר או חלקי</string>
+    <string name="library_problem_dictionary_missing">מילון צורות המילים חסר</string>
+    <string name="library_problems_found">נמצאו הבעיות הבאות:</string>
+    <string name="library_degraded_banner">חלק מקבצי הספרייה חסרים (%1$s). הספרים נפתחים, אבל חלק מהאפשרויות לא יעבדו.</string>
+    <string name="library_degraded_reinstall">התקנה מחדש</string>
+    <string name="library_degraded_dismiss">הסתר</string>
+    <string name="library_error_title">לא ניתן לפתוח את הספרייה</string>
+    <string name="library_error_override">נתיב הספרייה נקבע במשתנה הסביבה SEFORIMAPP_DATABASE_PATH, והתקנה מחדש לא משנה אותו. תקנו את הקובץ בנתיב הזה או הסירו את המשתנה, והפעילו את זית מחדש.</string>
+    <string name="library_error_repeated">אותה בעיה חזרה מיד אחרי ההתקנה מחדש, ולכן התקנה נוספת כנראה לא תעזור. ייתכן שהכונן פגום, מלא או מזויף. נסו כונן אחר.</string>
 </resources>

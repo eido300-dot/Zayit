@@ -22,7 +22,9 @@ import io.github.kdroidfilter.seforimapp.features.onboarding.navigation.OnBoardi
 import io.github.kdroidfilter.seforimapp.features.onboarding.navigation.ProgressBarState
 import io.github.kdroidfilter.seforimapp.features.onboarding.ui.components.OnBoardingScaffold
 import io.github.kdroidfilter.seforimapp.framework.database.DatabaseVersionManager
-import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
+import io.github.kdroidfilter.seforimapp.framework.database.checkLibraryHealth
+import io.github.kdroidfilter.seforimapp.framework.database.expectedDatabasePath
+import io.github.kdroidfilter.seforimapp.framework.database.libraryFilesFor
 import io.github.kdroidfilter.seforimapp.theme.PreviewContainer
 import org.jetbrains.compose.resources.stringResource
 import org.jetbrains.jewel.ui.component.Checkbox
@@ -32,6 +34,7 @@ import seforimapp.seforimapp.generated.resources.Res
 import seforimapp.seforimapp.generated.resources.license_accept_checkbox
 import seforimapp.seforimapp.generated.resources.license_screen_title
 import seforimapp.seforimapp.generated.resources.next_button
+import java.nio.file.Path
 
 @Composable
 fun LicenceScreen(
@@ -43,16 +46,15 @@ fun LicenceScreen(
     }
     LicenceView(
         onNext = {
-            // Check if DB exists and has compatible version
-            val dbExists = runCatching { getDatabasePath() }.isSuccess
-            val dbVersionCompatible =
-                if (dbExists) {
+            // Skip the download only for a complete, readable library of a compatible version: a
+            // seforim.db truncated by an interrupted install must not look installed.
+            val database = runCatching { Path.of(expectedDatabasePath()) }.getOrNull()
+            val isDatabaseReady =
+                database != null &&
+                    checkLibraryHealth(libraryFilesFor(database)).isHealthy &&
                     DatabaseVersionManager.isDatabaseVersionCompatible()
-                } else {
-                    false
-                }
 
-            if (dbExists && dbVersionCompatible) {
+            if (isDatabaseReady) {
                 // DB exists and version is compatible - skip install flow and go to user info
                 navController.navigate(OnBoardingDestination.UserProfilScreen)
             } else {

@@ -22,6 +22,7 @@ import io.github.kdroidfilter.seforimapp.framework.database.CatalogCache
 import io.github.kdroidfilter.seforimapp.framework.database.PersistentSqliteDriver
 import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.getUserSettingsDatabasePath
+import io.github.kdroidfilter.seforimapp.framework.database.libraryFilesFor
 import io.github.kdroidfilter.seforimapp.framework.desktop.DesktopManager
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
 import io.github.kdroidfilter.seforimapp.framework.search.AcronymFrequencyCache
@@ -101,11 +102,9 @@ object AppCoreBindings {
     @Provides
     @SingleIn(AppScope::class)
     fun provideSearchEngine(repository: SeforimRepository): SearchEngine {
-        val dbPath = getDatabasePath()
-        val indexPath = Paths.get(if (dbPath.endsWith(".db")) "$dbPath.lucene" else "$dbPath.luceneindex")
-        val dictionaryPath = indexPath.resolveSibling("lexical.db")
+        val files = libraryFilesFor(Paths.get(getDatabasePath()))
         val snippetProvider = RepositorySnippetSourceProvider(repository)
-        return LuceneSearchEngine(indexPath, snippetProvider, dictionaryPath = dictionaryPath)
+        return LuceneSearchEngine(files.textIndex, snippetProvider, dictionaryPath = files.dictionary)
     }
 
     @Provides
@@ -115,9 +114,8 @@ object AppCoreBindings {
     @Provides
     @SingleIn(AppScope::class)
     fun provideLuceneLookupSearchService(acronymCache: AcronymFrequencyCache): LuceneLookupSearchService {
-        val dbPath = getDatabasePath()
-        val indexPath = if (dbPath.endsWith(".db")) "$dbPath.lookup.lucene" else "$dbPath.lookupindex"
-        return LuceneLookupSearchService(Paths.get(indexPath), acronymCache = acronymCache)
+        val files = libraryFilesFor(Paths.get(getDatabasePath()))
+        return LuceneLookupSearchService(files.lookupIndex, acronymCache = acronymCache)
     }
 
     @Provides
