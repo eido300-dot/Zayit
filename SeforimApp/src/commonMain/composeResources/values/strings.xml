@@ -622,4 +622,8 @@
     <string name="library_error_title">לא ניתן לפתוח את הספרייה</string>
     <string name="library_error_override">נתיב הספרייה נקבע במשתנה הסביבה SEFORIMAPP_DATABASE_PATH, והתקנה מחדש לא משנה אותו. תקנו את הקובץ בנתיב הזה או הסירו את המשתנה, והפעילו את זית מחדש.</string>
     <string name="library_error_repeated">אותה בעיה חזרה מיד אחרי ההתקנה מחדש, ולכן התקנה נוספת כנראה לא תעזור. ייתכן שהכונן פגום, מלא או מזויף. נסו כונן אחר.</string>
+    <!-- Portable drive already in use -->
+    <string name="drive_in_use_title">זית כבר פתוח מהכונן הזה</string>
+    <string name="drive_in_use_message">עותק אחר של זית משתמש כבר בתיקיית הנתונים של הכונן, במחשב הזה או במחשב אחר. סגרו אותו ונסו שוב. פתיחה כפולה הייתה עלולה להרוס את ההערות וההגדרות.</string>
+    <string name="drive_in_use_close">סגירה</string>
 </resources>

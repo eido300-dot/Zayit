@@ -152,4 +152,12 @@ class PortableLayoutTest {
         assertNotEquals(first, other)
         assertTrue(Regex("io\\.github\\.app-portable-[0-9a-f]{8}").matches(first), first)
     }
+
+    @Test
+    fun `lock identifier is the same through a symlink to the data dir`() {
+        val real = Files.createDirectories(root.resolve("real"))
+        val link = Files.createSymbolicLink(root.resolve("link"), real)
+
+        assertEquals(lockIdentifierFor("io.github.app", real), lockIdentifierFor("io.github.app", link))
+    }
 }

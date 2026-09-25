@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimapp.framework.portable
 
 import io.github.kdroidfilter.seforimapp.logger.warnln
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.InvalidPathException
 import java.nio.file.Path
@@ -100,14 +101,15 @@ fun lockIdentifierFor(
     appId: String,
     dataDir: Path,
 ): String {
+    // The real path, so a symlink or another spelling of the same folder gives the same lock.
+    val canonical =
+        try {
+            dataDir.toRealPath()
+        } catch (_: IOException) {
+            dataDir.toAbsolutePath().normalize()
+        }
     val crc = CRC32()
-    crc.update(
-        dataDir
-            .toAbsolutePath()
-            .normalize()
-            .toString()
-            .toByteArray(Charsets.UTF_8),
-    )
+    crc.update(canonical.toString().toByteArray(Charsets.UTF_8))
     return "$appId-portable-" +
         java.lang.Long
             .toHexString(crc.value)

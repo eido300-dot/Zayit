@@ -49,6 +49,7 @@ import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryDegradedLayout
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
+import io.github.kdroidfilter.seforimapp.features.portable.DriveInUseWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowEvents
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowViewModel
@@ -68,6 +69,7 @@ import io.github.kdroidfilter.seforimapp.framework.database.routeStartup
 import io.github.kdroidfilter.seforimapp.framework.di.AppGraph
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
 import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
+import io.github.kdroidfilter.seforimapp.framework.portable.DriveLock
 import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.kdroidfilter.seforimapp.framework.portable.lockIdentifierFor
 import io.github.kdroidfilter.seforimapp.framework.session.SessionManager
@@ -94,6 +96,10 @@ import kotlin.time.Duration.Companion.seconds
 
 @OptIn(ExperimentalFoundationApi::class)
 private val AOT_TRAINING_DURATION = 45.seconds
+
+/** The portable drive lock, referenced here so it is held until the process ends (the OS releases it on exit). */
+@Volatile
+private var heldDriveLock: DriveLock? = null
 
 /**
  * Determines the initial route synchronously: settings, file sizes, the 100-byte database header,
@@ -174,6 +180,9 @@ fun main(args: Array<String>) {
         SingleInstanceManager.configuration =
             SingleInstanceManager.Configuration(lockIdentifier = lockIdentifierFor(appId, portableLayout.dataDir))
     }
+    val driveLock = portableLayout?.let { DriveLock.tryAcquire(it.dataDir) }
+    heldDriveLock = (driveLock as? DriveLock.Result.Acquired)?.lock
+    val driveInUse = driveLock is DriveLock.Result.InUse
 
     nucleusApplication(
         args,
@@ -187,7 +196,7 @@ fun main(args: Array<String>) {
         // Retry any database cleanup a previous run could not finish (e.g. a file locked
         // by antivirus/Windows Search). Runs once, before the SQLDelight repository opens
         // the DB, so a fresh install no longer needs the user to delete the old DB by hand.
-        remember { PendingDbCleanup.runOnce() }
+        remember { if (!driveInUse) PendingDbCleanup.runOnce() }
 
         val windowState =
             rememberWindowState(
@@ -280,7 +289,8 @@ fun main(args: Array<String>) {
         // existence, read version file) are fast local I/O with no network involved.
         // Using remember { } instead of LaunchedEffect avoids a blank first frame while
         // waiting for the coroutine scheduler to run the routing logic.
-        val startupRoute = remember { computeStartupRoute() }
+        // A copy that found the drive in use only shows DriveInUseWindow and must write nothing.
+        val startupRoute = remember { if (driveInUse) StartupRoute.Main(emptyList()) else computeStartupRoute() }
         val startsWithOnboarding = startupRoute is StartupRoute.Onboarding
         val showOnboardingFromState by mainAppState.showOnBoarding.collectAsState()
         val showOnboarding = showOnboardingFromState ?: startsWithOnboarding
@@ -319,7 +329,9 @@ fun main(args: Array<String>) {
                 theme = themeDefinition,
                 styling = componentStyling,
             ) {
-                if (showOnboarding) {
+                if (driveInUse) {
+                    DriveInUseWindow()
+                } else if (showOnboarding) {
                     OnBoardingWindow()
                 } else if (showDatabaseUpdate) {
                     DatabaseUpdateWindow(
