@@ -18,12 +18,16 @@ import io.github.kdroidfilter.seforimapp.features.database.update.screens.Offlin
 import io.github.kdroidfilter.seforimapp.features.database.update.screens.OnlineUpdateScreen
 import io.github.kdroidfilter.seforimapp.features.database.update.screens.UpdateOptionsScreen
 import io.github.kdroidfilter.seforimapp.features.database.update.screens.VersionCheckScreen
+import io.github.kdroidfilter.seforimapp.framework.database.BlockedReason
+import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
 
 @Composable
 fun DatabaseUpdateNavHost(
     navController: NavHostController,
     onUpdateComplete: () -> Unit = {},
     isDatabaseMissing: Boolean = false,
+    problems: List<LibraryProblem> = emptyList(),
+    blockedReason: BlockedReason? = null,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         val progressBarState = DatabaseUpdateProgressBarState
@@ -39,6 +43,8 @@ fun DatabaseUpdateNavHost(
                 VersionCheckScreen(
                     navController = navController,
                     isDatabaseMissing = isDatabaseMissing,
+                    problems = problems,
+                    blockedReason = blockedReason,
                 )
             }
 

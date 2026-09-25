@@ -51,25 +51,29 @@ fun resetDatabasePathCache() {
     synchronized(databasePathLock) { cachedDatabasePath = null }
 }
 
+/** True when `SEFORIMAPP_DATABASE_PATH` sets the database path; reinstalling never changes that path. */
+fun isDatabasePathOverridden(): Boolean = databasePathOverride() != null
+
+private fun databasePathOverride(): String? = System.getenv("SEFORIMAPP_DATABASE_PATH")?.takeIf { it.isNotBlank() }
+
+/** Where the database is expected, whether or not it exists; [getDatabasePath] also requires the file. */
+fun expectedDatabasePath(): String = databasePathOverride() ?: storedDatabasePath() ?: defaultDatabasePath()
+
+private fun defaultDatabasePath(): String = File(FileKit.databasesDir.path, DEFAULT_DB_NAME).absolutePath
+
+private fun storedDatabasePath(): String? {
+    val raw = AppSettings.getDatabasePath()
+    // A path to lexical.db is wrong: clear it.
+    if (raw?.endsWith("lexical.db", ignoreCase = true) == true) {
+        AppSettings.setDatabasePath(null)
+        return null
+    }
+    return raw
+}
+
 private fun resolveDatabasePath(): String {
-    // 1) Prefer an explicit environment variable override if provided
-    val envDbPath = System.getenv("SEFORIMAPP_DATABASE_PATH")?.takeIf { it.isNotBlank() }
-
-    // 2) Try AppSettings (but fix if it points to lexical.db which is wrong)
-    val rawSettingsPath = AppSettings.getDatabasePath()
-    val settingsPath =
-        if (rawSettingsPath?.endsWith("lexical.db", ignoreCase = true) == true) {
-            // Fix incorrect path by clearing it
-            AppSettings.setDatabasePath(null)
-            null
-        } else {
-            rawSettingsPath
-        }
-
-    // 3) Fallback to default location
-    val defaultDbPath = File(FileKit.databasesDir.path, DEFAULT_DB_NAME).absolutePath
-
-    val dbPath = envDbPath ?: settingsPath ?: defaultDbPath
+    // Environment override, then the stored path, then the default location.
+    val dbPath = expectedDatabasePath()
 
     infoln { "[DatabaseUtils] Database path resolved: $dbPath (exists: ${File(dbPath).exists()})" }
 

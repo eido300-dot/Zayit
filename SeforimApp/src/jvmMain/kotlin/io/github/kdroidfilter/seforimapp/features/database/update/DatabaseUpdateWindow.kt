@@ -5,6 +5,8 @@ import dev.nucleusframework.application.NucleusApplicationScope
 import io.github.kdroidfilter.seforimapp.core.presentation.components.InstallerWindow
 import io.github.kdroidfilter.seforimapp.features.database.update.navigation.DatabaseUpdateNavHost
 import io.github.kdroidfilter.seforimapp.features.database.update.navigation.DatabaseUpdateProgressBarState
+import io.github.kdroidfilter.seforimapp.framework.database.BlockedReason
+import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
 import io.github.kdroidfilter.seforimapp.icons.Deployed_code_update
 import org.jetbrains.compose.resources.stringResource
 import seforimapp.seforimapp.generated.resources.Res
@@ -14,6 +16,8 @@ import seforimapp.seforimapp.generated.resources.db_update_title_bar
 fun NucleusApplicationScope.DatabaseUpdateWindow(
     onUpdateComplete: () -> Unit = {},
     isDatabaseMissing: Boolean = false,
+    problems: List<LibraryProblem> = emptyList(),
+    blockedReason: BlockedReason? = null,
 ) {
     InstallerWindow(
         titleBarIcon = Deployed_code_update,
@@ -24,6 +28,8 @@ fun NucleusApplicationScope.DatabaseUpdateWindow(
             navController = navController,
             onUpdateComplete = onUpdateComplete,
             isDatabaseMissing = isDatabaseMissing,
+            problems = problems,
+            blockedReason = blockedReason,
         )
     }
 }
