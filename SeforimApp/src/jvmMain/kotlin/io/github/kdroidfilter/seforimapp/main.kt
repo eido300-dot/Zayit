@@ -47,6 +47,7 @@ import io.github.kdroidfilter.seforimapp.core.presentation.utils.rememberWindowV
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryDegradedLayout
+import io.github.kdroidfilter.seforimapp.features.database.health.verifyLibraryIfNeeded
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
 import io.github.kdroidfilter.seforimapp.features.portable.DriveInUseWindow
@@ -54,6 +55,7 @@ import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowEvents
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowViewModel
 import io.github.kdroidfilter.seforimapp.features.update.UpdateDialog
+import io.github.kdroidfilter.seforimapp.framework.database.DamagedPart
 import io.github.kdroidfilter.seforimapp.framework.database.DatabaseVersionManager
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryHealth
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
@@ -302,6 +304,7 @@ fun main(args: Array<String>) {
         var libraryProblems by remember { mutableStateOf(startupRoute.libraryProblems()) }
         var libraryBlockedReason by remember { mutableStateOf((startupRoute as? StartupRoute.LibraryError)?.reason) }
         var degradedProblems by remember { mutableStateOf((startupRoute as? StartupRoute.Main)?.degraded.orEmpty()) }
+        var damagedParts by remember { mutableStateOf(emptyList<DamagedPart>()) }
 
         // Sync pre-computed state to mainAppState for any other observers of the flow
         LaunchedEffect(Unit) {
@@ -563,6 +566,11 @@ fun main(args: Array<String>) {
                             LaunchedEffect(Unit) {
                                 appGraph.appUpdateService.checkOnStartup()
                             }
+                            // Portable: read the library back once after an install to catch a drive
+                            // that lost data. Not in the installing session, whose reads hit the cache.
+                            LaunchedEffect(Unit) {
+                                damagedParts = verifyLibraryIfNeeded(installedThisSession = startupRoute !is StartupRoute.Main)
+                            }
 
                             // Track whether the user is interacting by touch so hover-gated
                             // controls (e.g. pane close buttons) stay reachable; published
@@ -669,11 +677,13 @@ fun main(args: Array<String>) {
                                     LibraryDegradedLayout(
                                         problems = degradedProblems,
                                         onReinstall = {
-                                            libraryProblems = degradedProblems
+                                            libraryProblems = (degradedProblems + damagedParts.map { it.asProblem() }).distinct()
                                             libraryBlockedReason = null
                                             showDatabaseUpdate = true
                                         },
                                         onDismiss = { degradedProblems = emptyList() },
+                                        damaged = damagedParts,
+                                        onDismissDamage = { damagedParts = emptyList() },
                                     ) { TabsContent() }
                                 }
                             }
@@ -690,4 +700,11 @@ private fun StartupRoute.libraryProblems(): List<LibraryProblem> =
         is StartupRoute.Update -> problems
         is StartupRoute.LibraryError -> problems
         else -> emptyList()
+    }
+
+private fun DamagedPart.asProblem(): LibraryProblem =
+    when (this) {
+        DamagedPart.Database -> LibraryProblem.DatabaseUnreadable
+        DamagedPart.TextIndex -> LibraryProblem.TextIndexMissing
+        DamagedPart.LookupIndex -> LibraryProblem.LookupIndexMissing
     }

@@ -626,4 +626,6 @@
     <string name="drive_in_use_title">זית כבר פתוח מהכונן הזה</string>
     <string name="drive_in_use_message">עותק אחר של זית משתמש כבר בתיקיית הנתונים של הכונן, במחשב הזה או במחשב אחר. סגרו אותו ונסו שוב. פתיחה כפולה הייתה עלולה להרוס את ההערות וההגדרות.</string>
     <string name="drive_in_use_close">סגירה</string>
+    <!-- Library read back after install (counterfeit or failing drive) -->
+    <string name="library_damaged_banner">הכונן איבד חלק מקבצי הספרייה: מה שנכתב אליו לא נקרא בחזרה כמו שנכתב. ייתכן שהכונן מזויף (נפח אמיתי קטן מהמוצהר) או פגום. בדקו אותו בכלי כמו H2testw או F3, והתקינו מחדש, רצוי על כונן אחר.</string>
 </resources>

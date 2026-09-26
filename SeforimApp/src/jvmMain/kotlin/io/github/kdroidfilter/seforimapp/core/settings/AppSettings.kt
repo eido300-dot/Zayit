@@ -72,6 +72,9 @@ object AppSettings {
     // Problems for which a reinstall was last offered (see isRepeatedAfterReinstall)
     private const val KEY_LAST_REINSTALL_PROBLEMS = "last_reinstall_problems"
 
+    // Fingerprint of the library last read back intact (see LibraryVerifier)
+    private const val KEY_LIBRARY_VERIFIED = "library_verified"
+
     // Region configuration keys
     private const val KEY_REGION_COUNTRY = "region_country"
     private const val KEY_REGION_CITY = "region_city"
@@ -418,6 +421,12 @@ object AppSettings {
 
     fun setLastReinstallMarker(marker: String?) {
         settings[KEY_LAST_REINSTALL_PROBLEMS] = marker.orEmpty()
+    }
+
+    fun getVerifiedLibrary(): String? = settings[KEY_LIBRARY_VERIFIED, ""].ifBlank { null }
+
+    fun setVerifiedLibrary(fingerprint: String) {
+        settings[KEY_LIBRARY_VERIFIED] = fingerprint
     }
 
     // User profile accessors

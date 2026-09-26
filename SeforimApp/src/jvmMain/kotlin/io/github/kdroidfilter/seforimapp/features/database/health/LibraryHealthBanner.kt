@@ -9,13 +9,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import io.github.kdroidfilter.seforimapp.framework.database.DamagedPart
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
 import io.github.kdroidfilter.seforimapp.theme.PreviewContainer
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
+import org.jetbrains.jewel.ui.component.InlineErrorBanner
 import org.jetbrains.jewel.ui.component.InlineWarningBanner
 import org.jetbrains.jewel.ui.component.Text
 import seforimapp.seforimapp.generated.resources.Res
+import seforimapp.seforimapp.generated.resources.library_damaged_banner
 import seforimapp.seforimapp.generated.resources.library_degraded_banner
 import seforimapp.seforimapp.generated.resources.library_degraded_dismiss
 import seforimapp.seforimapp.generated.resources.library_degraded_reinstall
@@ -44,17 +47,32 @@ fun LibraryProblem.label(): StringResource =
     }
 
 /**
- * Shows [content] under a warning when optional library parts are missing. The books still open,
- * so the app never reinstalls 7.5 GB on its own for this: the user decides with [onReinstall].
+ * Shows [content] under a warning when optional library parts are missing, and under an error when
+ * the drive lost part of the library ([damaged]). The books may still open, so the app never
+ * reinstalls 7.5 GB on its own: the user decides with [onReinstall].
  */
 @Composable
 fun LibraryDegradedLayout(
     problems: List<LibraryProblem>,
     onReinstall: () -> Unit,
     onDismiss: () -> Unit,
+    damaged: List<DamagedPart> = emptyList(),
+    onDismissDamage: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
+        if (damaged.isNotEmpty()) {
+            val reinstallLabel = stringResource(Res.string.library_degraded_reinstall)
+            val dismissLabel = stringResource(Res.string.library_degraded_dismiss)
+            InlineErrorBanner(
+                text = stringResource(Res.string.library_damaged_banner),
+                modifier = Modifier.fillMaxWidth().padding(8.dp),
+                linkActions = {
+                    action(reinstallLabel, onClick = onReinstall)
+                    action(dismissLabel, onClick = onDismissDamage)
+                },
+            )
+        }
         if (problems.isNotEmpty()) {
             val names = problems.map { stringResource(it.label()) }.joinToString(", ")
             val reinstallLabel = stringResource(Res.string.library_degraded_reinstall)
@@ -80,6 +98,19 @@ private fun LibraryDegradedLayoutPreview() {
             problems = listOf(LibraryProblem.TextIndexMissing, LibraryProblem.DictionaryMissing),
             onReinstall = {},
             onDismiss = {},
+        ) { Text("Main window") }
+    }
+}
+
+@Composable
+@Preview
+private fun LibraryDamagedLayoutPreview() {
+    PreviewContainer {
+        LibraryDegradedLayout(
+            problems = emptyList(),
+            onReinstall = {},
+            onDismiss = {},
+            damaged = listOf(DamagedPart.Database),
         ) { Text("Main window") }
     }
 }
