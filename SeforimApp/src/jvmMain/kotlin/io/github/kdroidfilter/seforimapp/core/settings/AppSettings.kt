@@ -72,6 +72,9 @@ object AppSettings {
     // Problems for which a reinstall was last offered (see isRepeatedAfterReinstall)
     private const val KEY_LAST_REINSTALL_PROBLEMS = "last_reinstall_problems"
 
+    // Fingerprint of the library last read back intact (see LibraryVerifier)
+    private const val KEY_LIBRARY_VERIFIED = "library_verified"
+
     // Library problems the user asked to reinstall from the banner; handled at the next launch
     private const val KEY_REINSTALL_REQUESTED = "reinstall_requested"
 
@@ -421,6 +424,12 @@ object AppSettings {
 
     fun setLastReinstallMarker(marker: String?) {
         settings[KEY_LAST_REINSTALL_PROBLEMS] = marker.orEmpty()
+    }
+
+    fun getVerifiedLibrary(): String? = settings[KEY_LIBRARY_VERIFIED, ""].ifBlank { null }
+
+    fun setVerifiedLibrary(fingerprint: String?) {
+        settings[KEY_LIBRARY_VERIFIED] = fingerprint.orEmpty()
     }
 
     fun getReinstallRequest(): String? = settings[KEY_REINSTALL_REQUESTED, ""].ifBlank { null }

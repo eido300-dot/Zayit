@@ -49,7 +49,8 @@ import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryCheckWindow
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryDegradedLayout
-import io.github.kdroidfilter.seforimapp.features.database.health.reinstallStillHelps
+import io.github.kdroidfilter.seforimapp.features.database.health.asProblem
+import io.github.kdroidfilter.seforimapp.features.database.health.checkLibraryAfterStart
 import io.github.kdroidfilter.seforimapp.features.database.health.requestLibraryReinstall
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
@@ -58,6 +59,7 @@ import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowEvents
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowViewModel
 import io.github.kdroidfilter.seforimapp.features.update.UpdateDialog
+import io.github.kdroidfilter.seforimapp.framework.database.DamagedPart
 import io.github.kdroidfilter.seforimapp.framework.database.DatabaseVersionManager
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryHealth
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
@@ -141,13 +143,14 @@ private fun readStartupRoute(): StartupRoute {
             repeatedAfterReinstall = isRepeatedAfterReinstall(AppSettings.getLastReinstallMarker(), health.problems, modified),
             reinstallRequested = requested,
         )
-    // Written only when it changes.
+    // Written only when it changes: in portable mode every write is a durable save on the drive.
     val marker =
         when (route) {
             is StartupRoute.Update ->
                 if (route.problems.isNotEmpty()) reinstallMarker(route.problems, modified) else AppSettings.getLastReinstallMarker()
-            // Kept while parts are missing, so a reinstall that did not help is recognized.
-            is StartupRoute.Main -> if (route.degraded.isEmpty()) null else AppSettings.getLastReinstallMarker()
+            // A portable library is only known to be fine after it was read back (checkLibraryAfterStart).
+            is StartupRoute.Main ->
+                if (route.degraded.isEmpty() && !PortableEnvironment.isPortable) null else AppSettings.getLastReinstallMarker()
             StartupRoute.Onboarding, is StartupRoute.LibraryError -> AppSettings.getLastReinstallMarker()
         }
     if (marker != AppSettings.getLastReinstallMarker()) AppSettings.setLastReinstallMarker(marker)
@@ -332,6 +335,7 @@ fun main(args: Array<String>) {
         var libraryProblems by remember(startupRoute) { mutableStateOf(startupRoute?.libraryProblems().orEmpty()) }
         val libraryBlockedReason = (startupRoute as? StartupRoute.LibraryError)?.reason
         var degradedProblems by remember(startupRoute) { mutableStateOf((startupRoute as? StartupRoute.Main)?.degraded.orEmpty()) }
+        var damagedParts by remember { mutableStateOf(emptyList<DamagedPart>()) }
         var reinstallHelps by remember { mutableStateOf(true) }
         var reinstallRequested by remember { mutableStateOf(false) }
         val reinstallScope = rememberCoroutineScope()
@@ -598,8 +602,16 @@ fun main(args: Array<String>) {
                             LaunchedEffect(Unit) {
                                 appGraph.appUpdateService.checkOnStartup()
                             }
+                            // Portable: read the library back once after an install to catch a drive
+                            // that lost data. Not in the installing session, whose reads hit the cache.
                             LaunchedEffect(Unit) {
-                                reinstallHelps = reinstallStillHelps((startupRoute as? StartupRoute.Main)?.degraded.orEmpty())
+                                val found =
+                                    checkLibraryAfterStart(
+                                        installedThisSession = startupRoute !is StartupRoute.Main,
+                                        degraded = (startupRoute as? StartupRoute.Main)?.degraded.orEmpty(),
+                                    )
+                                damagedParts = found.damaged
+                                reinstallHelps = found.reinstallHelps
                             }
 
                             // Track whether the user is interacting by touch so hover-gated
@@ -709,10 +721,11 @@ fun main(args: Array<String>) {
                                         onReinstall = {
                                             if (!reinstallRequested) {
                                                 reinstallRequested = true
+                                                val problems = (degradedProblems + damagedParts.map { it.asProblem() }).distinct()
                                                 reinstallScope.launch {
                                                     // Back to normal if the restart did not happen, so the banner still works.
                                                     try {
-                                                        requestLibraryReinstall(degradedProblems)
+                                                        requestLibraryReinstall(problems)
                                                     } finally {
                                                         reinstallRequested = false
                                                     }
@@ -721,6 +734,8 @@ fun main(args: Array<String>) {
                                         },
                                         reinstallHelps = reinstallHelps,
                                         onDismiss = { degradedProblems = emptyList() },
+                                        damaged = damagedParts,
+                                        onDismissDamage = { damagedParts = emptyList() },
                                     ) { TabsContent() }
                                 }
                             }
@@ -736,5 +751,5 @@ private fun StartupRoute.libraryProblems(): List<LibraryProblem> =
     when (this) {
         is StartupRoute.Update -> problems
         is StartupRoute.LibraryError -> problems
-        else -> emptyList()
+        is StartupRoute.Main, StartupRoute.Onboarding -> emptyList()
     }
