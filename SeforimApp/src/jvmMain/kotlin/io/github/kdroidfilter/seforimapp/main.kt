@@ -30,6 +30,7 @@ import io.github.kdroidfilter.seforim.tabs.TabType
 import io.github.kdroidfilter.seforim.tabs.TabsDestination
 import io.github.kdroidfilter.seforim.tabs.TabsEvents
 import io.github.kdroidfilter.seforimapp.core.buildCopyWithSourcePayload
+import io.github.kdroidfilter.seforimapp.core.coroutines.runSuspendCatching
 import io.github.kdroidfilter.seforimapp.core.deeplink.ContentDeepLinkHandler
 import io.github.kdroidfilter.seforimapp.core.presentation.components.AppDockMenu
 import io.github.kdroidfilter.seforimapp.core.presentation.components.AppJumpList
@@ -44,6 +45,7 @@ import io.github.kdroidfilter.seforimapp.core.presentation.utils.detectTouchMode
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.processKeyShortcuts
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.rememberWindowViewModelStoreOwner
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.features.database.health.LibraryCheckWindow
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryDegradedLayout
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
@@ -67,6 +69,7 @@ import io.github.kdroidfilter.seforimapp.framework.di.AppGraph
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
 import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
 import io.github.kdroidfilter.seforimapp.framework.session.SessionManager
+import io.github.kdroidfilter.seforimapp.logger.errorln
 import io.github.kdroidfilter.seforimapp.logger.infoln
 import io.github.kdroidfilter.seforimapp.logger.isDevEnv
 import io.github.kdroidfilter.seforimapp.logger.warnln
@@ -74,7 +77,10 @@ import io.github.kdroidfilter.seforimlibrary.cli.runCli
 import io.github.kdroidfilter.seforimlibrary.core.text.HebrewTextUtils
 import io.github.vinceglb.filekit.FileKit
 import io.sentry.Sentry
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
 import org.jetbrains.jewel.intui.standalone.theme.IntUiTheme
@@ -92,10 +98,21 @@ import kotlin.time.Duration.Companion.seconds
 private val AOT_TRAINING_DURATION = 45.seconds
 
 /**
+ * The initial route. Never throws: the check runs in a launched effect, where an exception would
+ * repeat on every launch and take the app down with it, and an unexpected failure is no reason to
+ * offer a 7.5 GB reinstall. The app opens without the library check instead, and the failure is
+ * reported once.
+ */
+private fun computeStartupRoute(): StartupRoute =
+    runSuspendCatching { readStartupRoute() }
+        .onFailure { errorln(it) { "[startup] the library check failed; opening the app without it" } }
+        .getOrElse { StartupRoute.Main(emptyList()) }
+
+/**
  * Determines the initial route synchronously: settings, file sizes, the 100-byte database header,
  * one read-only query and the index metadata. All fast local I/O, well under a second.
  */
-private fun computeStartupRoute(): StartupRoute {
+private fun readStartupRoute(): StartupRoute {
     if (!AppSettings.isOnboardingFinished()) return StartupRoute.Onboarding
     val database = runCatching { Path.of(expectedDatabasePath()) }.getOrNull()
     val health =
@@ -169,11 +186,6 @@ fun main(args: Array<String>) {
         aotTraining(duration = AOT_TRAINING_DURATION)
 
         FileKit.init(appId)
-
-        // Retry any database cleanup a previous run could not finish (e.g. a file locked
-        // by antivirus/Windows Search). Runs once, before the SQLDelight repository opens
-        // the DB, so a fresh install no longer needs the user to delete the old DB by hand.
-        remember { PendingDbCleanup.runOnce() }
 
         val windowState =
             rememberWindowState(
@@ -262,26 +274,35 @@ fun main(args: Array<String>) {
         // Get MainAppState from DI graph
         val mainAppState = appGraph.mainAppState
 
-        // Compute startup routing synchronously — all operations (read settings, check file
-        // existence, read version file) are fast local I/O with no network involved.
-        // Using remember { } instead of LaunchedEffect avoids a blank first frame while
-        // waiting for the coroutine scheduler to run the routing logic.
-        val startupRoute = remember { computeStartupRoute() }
+        // Startup routing reads settings, the database header and the index metadata. On a slow
+        // or network drive that can take seconds, so it runs off the UI thread while
+        // LibraryCheckWindow stands in (hidden unless it takes long). It is null until known.
+        var startupRoute by remember { mutableStateOf<StartupRoute?>(null) }
+        LaunchedEffect(Unit) {
+            startupRoute =
+                withContext(Dispatchers.IO) {
+                    // Retry any database cleanup a previous run could not finish (e.g. a file
+                    // locked by antivirus/Windows Search), before the repository opens the DB.
+                    PendingDbCleanup.runOnce()
+                    computeStartupRoute()
+                }
+        }
         val startsWithOnboarding = startupRoute is StartupRoute.Onboarding
         val showOnboardingFromState by mainAppState.showOnBoarding.collectAsState()
         val showOnboarding = showOnboardingFromState ?: startsWithOnboarding
-        var showDatabaseUpdate by remember {
+        // Keyed on the route: computed once it is known, then kept.
+        var showDatabaseUpdate by remember(startupRoute) {
             mutableStateOf(
                 startupRoute is StartupRoute.Update || startupRoute is StartupRoute.LibraryError,
             )
         }
-        var libraryProblems by remember { mutableStateOf(startupRoute.libraryProblems()) }
-        var libraryBlockedReason by remember { mutableStateOf((startupRoute as? StartupRoute.LibraryError)?.reason) }
-        var degradedProblems by remember { mutableStateOf((startupRoute as? StartupRoute.Main)?.degraded.orEmpty()) }
+        var libraryProblems by remember(startupRoute) { mutableStateOf(startupRoute?.libraryProblems().orEmpty()) }
+        var libraryBlockedReason by remember(startupRoute) { mutableStateOf((startupRoute as? StartupRoute.LibraryError)?.reason) }
+        var degradedProblems by remember(startupRoute) { mutableStateOf((startupRoute as? StartupRoute.Main)?.degraded.orEmpty()) }
 
         // Sync pre-computed state to mainAppState for any other observers of the flow
-        LaunchedEffect(Unit) {
-            mainAppState.setShowOnBoarding(startsWithOnboarding)
+        LaunchedEffect(startupRoute) {
+            if (startupRoute != null) mainAppState.setShowOnBoarding(startsWithOnboarding)
         }
 
         val initialTheme = remember { AppSettings.getThemeMode() }
@@ -305,7 +326,9 @@ fun main(args: Array<String>) {
                 theme = themeDefinition,
                 styling = componentStyling,
             ) {
-                if (showOnboarding) {
+                if (startupRoute == null) {
+                    LibraryCheckWindow()
+                } else if (showOnboarding) {
                     OnBoardingWindow()
                 } else if (showDatabaseUpdate) {
                     DatabaseUpdateWindow(
