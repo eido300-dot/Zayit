@@ -31,6 +31,7 @@ class AppUpdateServiceTest {
     ) : Updater {
         var restartCalls = 0
         var quitCalls = 0
+        var downloadCalls = 0
 
         override val currentVersion = "1.0.0"
 
@@ -40,6 +41,7 @@ class AppUpdateServiceTest {
 
         override fun downloadUpdate(info: UpdateInfo): Flow<DownloadProgress> =
             flow {
+                downloadCalls++
                 emit(DownloadProgress(50, 100, 50.0))
                 emit(DownloadProgress(100, 100, 100.0, installerFile))
             }
@@ -57,7 +59,9 @@ class AppUpdateServiceTest {
         result: UpdateResult,
         os: Platform,
         fake: FakeUpdater = FakeUpdater(result),
-    ): Pair<AppUpdateService, FakeUpdater> = AppUpdateService(updaterProvider = { fake }, config = AppUpdateConfig(), os = os) to fake
+        isPortable: Boolean = false,
+    ): Pair<AppUpdateService, FakeUpdater> =
+        AppUpdateService(updaterProvider = { fake }, config = AppUpdateConfig(), os = os, isPortable = isPortable) to fake
 
     @Test
     fun `patch on windows pre-downloads and installs silently on close`() =
@@ -132,5 +136,67 @@ class AppUpdateServiceTest {
         assertTrue(svc.dialogVisible.value)
         svc.closeDialog()
         assertFalse(svc.dialogVisible.value)
+    }
+
+    @Test
+    fun `portable patch on windows is reported but never downloaded or installed on close`() =
+        runTest {
+            val (svc, fake) =
+                service(UpdateResult.Available(updateInfo("1.0.1"), UpdateLevel.PATCH), Platform.Windows, isPortable = true)
+            svc.checkOnStartup()
+
+            val state = svc.state.value
+            assertIs<UpdateUiState.PortableUpdateAvailable>(state)
+            assertEquals("1.0.1", state.availableVersion)
+            assertTrue(state.showTitleBarIcon)
+            assertFalse(svc.installPendingOnClose())
+            assertEquals(0, fake.downloadCalls)
+            assertEquals(0, fake.quitCalls)
+        }
+
+    @Test
+    fun `portable minor ignores download and install requests`() =
+        runTest {
+            val fake = FakeUpdater(UpdateResult.Available(updateInfo("1.1.0"), UpdateLevel.MINOR))
+            val svc =
+                AppUpdateService(
+                    updaterProvider = { fake },
+                    config = AppUpdateConfig(),
+                    os = Platform.Linux,
+                    isPortable = true,
+                    scope = this,
+                )
+            svc.checkOnStartup()
+
+            svc.startDownload()
+            advanceUntilIdle()
+            svc.installAndRestart()
+
+            assertIs<UpdateUiState.PortableUpdateAvailable>(svc.state.value)
+            assertEquals(0, fake.downloadCalls)
+            assertEquals(0, fake.restartCalls)
+        }
+
+    @Test
+    fun `portable recheck finds the update again`() =
+        runTest {
+            val (svc, _) =
+                service(UpdateResult.Available(updateInfo("1.1.0"), UpdateLevel.MINOR), Platform.MacOS, isPortable = true)
+            svc.checkOnStartup()
+            svc.recheck()
+            assertIs<UpdateUiState.PortableUpdateAvailable>(svc.state.value)
+        }
+
+    @Test
+    fun `portable fake state shows the portable notice`() {
+        val svc =
+            AppUpdateService(
+                updaterProvider = { FakeUpdater(UpdateResult.NotAvailable) },
+                config = AppUpdateConfig(fakeState = "patch"),
+                os = Platform.Windows,
+                isPortable = true,
+            )
+        assertIs<UpdateUiState.PortableUpdateAvailable>(svc.state.value)
+        assertFalse(svc.installPendingOnClose())
     }
 }

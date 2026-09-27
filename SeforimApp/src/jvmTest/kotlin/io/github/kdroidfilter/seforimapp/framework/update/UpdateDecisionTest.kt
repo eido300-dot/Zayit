@@ -5,6 +5,7 @@ import dev.nucleusframework.updater.UpdateLevel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /** N1 — pure decision logic, no I/O. */
@@ -45,5 +46,20 @@ class UpdateDecisionTest {
         assertFalse(shouldPreDownload(UpdateLevel.MINOR))
         assertFalse(shouldPreDownload(UpdateLevel.MAJOR))
         assertFalse(shouldPreDownload(UpdateLevel.PRE_RELEASE))
+    }
+
+    @Test
+    fun `available update state depends on portable mode`() {
+        for (os in listOf(Platform.Windows, Platform.MacOS, Platform.Linux)) {
+            for (level in UpdateLevel.entries) {
+                val portable = availableUpdateState("2.0.0", level, os, isPortable = true)
+                assertEquals(UpdateUiState.PortableUpdateAvailable("2.0.0", level), portable)
+
+                val installed = availableUpdateState("2.0.0", level, os, isPortable = false)
+                assertIs<UpdateUiState.Available>(installed)
+                assertEquals(resolveUpdateMode(level, os), installed.mode)
+                assertEquals(needsDbWarning(level), installed.needsDbWarning)
+            }
+        }
     }
 }

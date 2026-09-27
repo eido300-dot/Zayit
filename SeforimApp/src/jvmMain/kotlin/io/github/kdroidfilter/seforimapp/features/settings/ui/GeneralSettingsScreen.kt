@@ -35,6 +35,7 @@ import io.github.kdroidfilter.seforimapp.features.settings.general.GeneralSettin
 import io.github.kdroidfilter.seforimapp.features.settings.general.GeneralSettingsState
 import io.github.kdroidfilter.seforimapp.features.settings.general.GeneralSettingsViewModel
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
+import io.github.kdroidfilter.seforimapp.framework.update.AppUpdateService
 import io.github.kdroidfilter.seforimapp.framework.update.UpdateMode
 import io.github.kdroidfilter.seforimapp.framework.update.UpdateUiState
 import io.github.kdroidfilter.seforimapp.theme.PreviewContainer
@@ -70,6 +71,8 @@ import seforimapp.seforimapp.generated.resources.update_checking
 import seforimapp.seforimapp.generated.resources.update_download_action
 import seforimapp.seforimapp.generated.resources.update_downloading
 import seforimapp.seforimapp.generated.resources.update_install_restart
+import seforimapp.seforimapp.generated.resources.update_open_download_page
+import seforimapp.seforimapp.generated.resources.update_portable_banner
 import seforimapp.seforimapp.generated.resources.update_up_to_date
 
 @Composable
@@ -279,6 +282,8 @@ private fun UpdateStatusBanner(
             )
         }
 
+        is UpdateUiState.PortableUpdateAvailable -> PortableUpdateBanner(updateState.version)
+
         UpdateUiState.UpToDate -> {
             val checkLabel = stringResource(Res.string.update_check_action)
             InlineSuccessBanner(
@@ -302,6 +307,17 @@ private fun UpdateStatusBanner(
         UpdateUiState.Idle, UpdateUiState.Checking ->
             InlineInformationBanner(text = stringResource(Res.string.update_checking))
     }
+}
+
+@Composable
+private fun PortableUpdateBanner(version: String) {
+    val downloadPageLabel = stringResource(Res.string.update_open_download_page)
+    InlineInformationBanner(
+        text = stringResource(Res.string.update_portable_banner, version),
+        linkActions = {
+            action(downloadPageLabel, onClick = { UrlOpener.open(AppUpdateService.DOWNLOAD_URL) })
+        },
+    )
 }
 
 @Composable

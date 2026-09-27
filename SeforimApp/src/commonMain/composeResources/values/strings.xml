@@ -523,6 +523,9 @@
     <string name="update_check_action">בדוק שוב</string>
     <string name="update_checking">בודק עדכונים…</string>
     <string name="update_check_failed">לא ניתן לבדוק עדכונים — ודא שקיים חיבור לאינטרנט</string>
+    <string name="update_portable_banner">גרסה %1$s זמינה. זית שרץ מכונן חיצוני לא מתעדכן לבד.</string>
+    <string name="update_portable_message">גרסה %1$s של זית זמינה. כדי לעדכן את העותק שבכונן, הורד את הגרסה החדשה והחלף בה את התוכנה שבכונן.</string>
+    <string name="update_open_download_page">לדף ההורדה</string>
 
     <!-- Filtering (search panels) accessibility labels -->
     <string name="filter_select_category">בחר קטגוריה לסינון</string>
