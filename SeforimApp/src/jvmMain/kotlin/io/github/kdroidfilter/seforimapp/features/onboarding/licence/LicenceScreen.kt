@@ -11,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,6 +27,9 @@ import io.github.kdroidfilter.seforimapp.framework.database.checkLibraryHealth
 import io.github.kdroidfilter.seforimapp.framework.database.expectedDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.libraryFilesFor
 import io.github.kdroidfilter.seforimapp.theme.PreviewContainer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.stringResource
 import org.jetbrains.jewel.ui.component.Checkbox
 import org.jetbrains.jewel.ui.component.DefaultButton
@@ -34,6 +38,7 @@ import seforimapp.seforimapp.generated.resources.Res
 import seforimapp.seforimapp.generated.resources.license_accept_checkbox
 import seforimapp.seforimapp.generated.resources.license_screen_title
 import seforimapp.seforimapp.generated.resources.next_button
+import java.nio.file.InvalidPathException
 import java.nio.file.Path
 
 @Composable
@@ -44,26 +49,42 @@ fun LicenceScreen(
     LaunchedEffect(Unit) {
         progressBarState.setProgress(0.1f)
     }
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
     LicenceView(
         onNext = {
-            // Skip the download only for a complete, readable library of a compatible version: a
-            // seforim.db truncated by an interrupted install must not look installed.
-            val database = runCatching { Path.of(expectedDatabasePath()) }.getOrNull()
-            val isDatabaseReady =
-                database != null &&
-                    checkLibraryHealth(libraryFilesFor(database)).isHealthy &&
-                    DatabaseVersionManager.isDatabaseVersionCompatible()
-
-            if (isDatabaseReady) {
-                // DB exists and version is compatible - skip install flow and go to user info
-                navController.navigate(OnBoardingDestination.UserProfilScreen)
-            } else {
-                // DB doesn't exist or version is incompatible - continue with installation flow
-                navController.navigate(OnBoardingDestination.AvailableDiskSpaceScreen)
+            if (!checking) {
+                checking = true
+                scope.launch {
+                    // Reads the library files, which can be slow on a drive: not on the UI thread.
+                    val isDatabaseReady = withContext(Dispatchers.IO) { isInstalledLibraryReady() }
+                    checking = false
+                    if (isDatabaseReady) {
+                        // DB exists and version is compatible - skip install flow and go to user info
+                        navController.navigate(OnBoardingDestination.UserProfilScreen)
+                    } else {
+                        // DB doesn't exist or version is incompatible - continue with installation flow
+                        navController.navigate(OnBoardingDestination.AvailableDiskSpaceScreen)
+                    }
+                }
             }
         },
         onPrevious = { navController.navigateUp() },
     )
+}
+
+/**
+ * Skip the download only for a complete, readable library of a compatible version: a seforim.db
+ * truncated by an interrupted install must not look installed.
+ */
+private fun isInstalledLibraryReady(): Boolean {
+    val database =
+        try {
+            Path.of(expectedDatabasePath())
+        } catch (_: InvalidPathException) {
+            return false
+        }
+    return checkLibraryHealth(libraryFilesFor(database)).isHealthy && DatabaseVersionManager.isDatabaseVersionCompatible()
 }
 
 @Composable

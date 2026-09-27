@@ -71,6 +71,7 @@ fun NucleusApplicationScope.InstallerWindow(
     titleBarIcon: ImageVector,
     titleBarText: String,
     progress: StateFlow<Float>,
+    visible: Boolean = true,
     content: @Composable (navController: NavHostController) -> Unit,
 ) {
     val windowState = remember { getCenteredWindowState(720, 420) }
@@ -79,7 +80,7 @@ fun NucleusApplicationScope.InstallerWindow(
         title = stringResource(Res.string.app_name),
         icon = if (PlatformInfo.isMacOS) null else painterResource(Res.drawable.AppIcon),
         state = windowState,
-        visible = true,
+        visible = visible,
         resizable = false,
     ) {
         // Mirror the in-app progress bar onto the OS taskbar/dock indicator.
