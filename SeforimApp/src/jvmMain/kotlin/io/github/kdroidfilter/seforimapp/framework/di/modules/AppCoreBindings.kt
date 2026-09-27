@@ -69,7 +69,8 @@ object AppCoreBindings {
         // Single shared connection to the local user database (separate from the
         // read-only books DB). All user stores inject this instance instead of
         // opening their own driver. New tables are added transparently for
-        // existing users via CREATE TABLE IF NOT EXISTS in Schema.create().
+        // existing users via CREATE TABLE IF NOT EXISTS in Schema.create(); new columns
+        // on an existing table are not, and need an explicit ALTER TABLE here.
         // A backup imported from Settings is staged and swapped in here, before the file is opened.
         runCatching { applyPendingUserSettingsImport() }
         val driver = JdbcSqliteDriver("jdbc:sqlite:${getUserSettingsDatabasePath()}")
