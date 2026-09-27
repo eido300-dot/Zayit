@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -28,6 +29,7 @@ import seforimapp.seforimapp.generated.resources.library_problem_database_unread
 import seforimapp.seforimapp.generated.resources.library_problem_dictionary_missing
 import seforimapp.seforimapp.generated.resources.library_problem_lookup_index_missing
 import seforimapp.seforimapp.generated.resources.library_problem_text_index_missing
+import seforimapp.seforimapp.generated.resources.library_reinstall_did_not_help
 
 /** The user-facing name of a library problem. */
 fun LibraryProblem.label(): StringResource =
@@ -45,28 +47,35 @@ fun LibraryProblem.label(): StringResource =
 
 /**
  * Shows [content] under a warning when optional library parts are missing. The books still open,
- * so the app never reinstalls 7.5 GB on its own for this: the user decides with [onReinstall].
+ * so the app never reinstalls 7.5 GB on its own for this: the user decides with [onReinstall]. When a
+ * reinstall already ran for the same problems and did not help ([reinstallHelps] false), it is not
+ * offered again.
  */
 @Composable
 fun LibraryDegradedLayout(
     problems: List<LibraryProblem>,
     onReinstall: () -> Unit,
     onDismiss: () -> Unit,
+    reinstallHelps: Boolean = true,
     content: @Composable () -> Unit,
 ) {
+    val didNotHelp = if (reinstallHelps) "" else " " + stringResource(Res.string.library_reinstall_did_not_help)
     Column(modifier = Modifier.fillMaxSize()) {
         if (problems.isNotEmpty()) {
             val names = problems.map { stringResource(it.label()) }.joinToString(", ")
             val reinstallLabel = stringResource(Res.string.library_degraded_reinstall)
             val dismissLabel = stringResource(Res.string.library_degraded_dismiss)
-            InlineWarningBanner(
-                text = stringResource(Res.string.library_degraded_banner, names),
-                modifier = Modifier.fillMaxWidth().padding(8.dp),
-                linkActions = {
-                    action(reinstallLabel, onClick = onReinstall)
-                    action(dismissLabel, onClick = onDismiss)
-                },
-            )
+            // The banner keeps its first actions; a new key rebuilds it when the offer changes.
+            key(reinstallHelps) {
+                InlineWarningBanner(
+                    text = stringResource(Res.string.library_degraded_banner, names) + didNotHelp,
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    linkActions = {
+                        if (reinstallHelps) action(reinstallLabel, onClick = onReinstall)
+                        action(dismissLabel, onClick = onDismiss)
+                    },
+                )
+            }
         }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) { content() }
     }
