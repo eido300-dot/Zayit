@@ -68,6 +68,12 @@ object AppSettings {
     // Onboarding state
     private const val KEY_ONBOARDING_FINISHED = "onboarding_finished"
 
+    // Problems for which a reinstall was last offered (see isRepeatedAfterReinstall)
+    private const val KEY_LAST_REINSTALL_PROBLEMS = "last_reinstall_problems"
+
+    // Library problems the user asked to reinstall from the banner; handled at the next launch
+    private const val KEY_REINSTALL_REQUESTED = "reinstall_requested"
+
     // Region configuration keys
     private const val KEY_REGION_COUNTRY = "region_country"
     private const val KEY_REGION_CITY = "region_city"
@@ -412,6 +418,18 @@ object AppSettings {
 
     fun setOnboardingFinished(finished: Boolean) {
         settings[KEY_ONBOARDING_FINISHED] = finished
+    }
+
+    fun getLastReinstallMarker(): String? = settings[KEY_LAST_REINSTALL_PROBLEMS, ""].ifBlank { null }
+
+    fun setLastReinstallMarker(marker: String?) {
+        settings[KEY_LAST_REINSTALL_PROBLEMS] = marker.orEmpty()
+    }
+
+    fun getReinstallRequest(): String? = settings[KEY_REINSTALL_REQUESTED, ""].ifBlank { null }
+
+    fun setReinstallRequest(problems: String?) {
+        settings[KEY_REINSTALL_REQUESTED] = problems.orEmpty()
     }
 
     // User profile accessors
