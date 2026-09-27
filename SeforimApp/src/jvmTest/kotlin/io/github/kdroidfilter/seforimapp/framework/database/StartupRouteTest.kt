@@ -16,7 +16,29 @@ class StartupRouteTest {
         versionCompatible: Boolean = true,
         overridden: Boolean = false,
         repeated: Boolean = false,
-    ) = routeStartup(onboardingFinished, health, versionCompatible, overridden, repeated)
+        requested: List<LibraryProblem>? = null,
+    ) = routeStartup(onboardingFinished, health, versionCompatible, overridden, repeated, requested)
+
+    @Test
+    fun `a reinstall asked for from the banner opens the reinstall window with every problem`() {
+        assertEquals(
+            StartupRoute.Update(listOf(LibraryProblem.DatabaseUnreadable, LibraryProblem.TextIndexMissing)),
+            route(health = noIndex, requested = listOf(LibraryProblem.DatabaseUnreadable)),
+        )
+        assertEquals(
+            StartupRoute.LibraryError(listOf(LibraryProblem.TextIndexMissing), BlockedReason.DatabasePathOverridden),
+            route(overridden = true, requested = listOf(LibraryProblem.TextIndexMissing)),
+        )
+        assertEquals(StartupRoute.Onboarding, route(onboardingFinished = false, requested = listOf(LibraryProblem.TextIndexMissing)))
+    }
+
+    @Test
+    fun `stored problems read back, skipping names this version does not know`() {
+        val problems = listOf(LibraryProblem.DatabaseUnreadable, LibraryProblem.DictionaryMissing)
+
+        assertEquals(problems, decodeProblems(encodeProblems(problems)))
+        assertEquals(listOf(LibraryProblem.CatalogMissing), decodeProblems("SomethingNew,CatalogMissing"))
+    }
 
     @Test
     fun `onboarding comes before any library problem`() {

@@ -47,6 +47,8 @@ import io.github.kdroidfilter.seforimapp.core.presentation.utils.rememberWindowV
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryCheckWindow
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryDegradedLayout
+import io.github.kdroidfilter.seforimapp.features.database.health.reinstallStillHelps
+import io.github.kdroidfilter.seforimapp.features.database.health.requestLibraryReinstall
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindow
@@ -59,6 +61,7 @@ import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
 import io.github.kdroidfilter.seforimapp.framework.database.PendingDbCleanup
 import io.github.kdroidfilter.seforimapp.framework.database.StartupRoute
 import io.github.kdroidfilter.seforimapp.framework.database.checkLibraryHealth
+import io.github.kdroidfilter.seforimapp.framework.database.decodeProblems
 import io.github.kdroidfilter.seforimapp.framework.database.expectedDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.isDatabasePathOverridden
 import io.github.kdroidfilter.seforimapp.framework.database.isRepeatedAfterReinstall
@@ -119,6 +122,8 @@ private fun readStartupRoute(): StartupRoute {
         database?.let { checkLibraryHealth(libraryFilesFor(it)) }
             ?: LibraryHealth(listOf(LibraryProblem.DatabaseMissing))
     val modified = database?.let { runCatching { Files.getLastModifiedTime(it).toMillis() }.getOrNull() }
+    val requested = AppSettings.getReinstallRequest()?.let(::decodeProblems)
+    if (requested != null) AppSettings.setReinstallRequest(null)
     val route =
         routeStartup(
             onboardingFinished = true,
@@ -127,13 +132,15 @@ private fun readStartupRoute(): StartupRoute {
                 !health.needsReinstall && runCatching { DatabaseVersionManager.isDatabaseVersionCompatible() }.getOrDefault(false),
             databasePathOverridden = isDatabasePathOverridden(),
             repeatedAfterReinstall = isRepeatedAfterReinstall(AppSettings.getLastReinstallMarker(), health.problems, modified),
+            reinstallRequested = requested,
         )
     // Written only when it changes.
     val marker =
         when (route) {
             is StartupRoute.Update ->
                 if (route.problems.isNotEmpty()) reinstallMarker(route.problems, modified) else AppSettings.getLastReinstallMarker()
-            is StartupRoute.Main -> null
+            // Kept while parts are missing, so a reinstall that did not help is recognized.
+            is StartupRoute.Main -> if (route.degraded.isEmpty()) null else AppSettings.getLastReinstallMarker()
             StartupRoute.Onboarding, is StartupRoute.LibraryError -> AppSettings.getLastReinstallMarker()
         }
     if (marker != AppSettings.getLastReinstallMarker()) AppSettings.setLastReinstallMarker(marker)
@@ -297,8 +304,11 @@ fun main(args: Array<String>) {
             )
         }
         var libraryProblems by remember(startupRoute) { mutableStateOf(startupRoute?.libraryProblems().orEmpty()) }
-        var libraryBlockedReason by remember(startupRoute) { mutableStateOf((startupRoute as? StartupRoute.LibraryError)?.reason) }
+        val libraryBlockedReason = (startupRoute as? StartupRoute.LibraryError)?.reason
         var degradedProblems by remember(startupRoute) { mutableStateOf((startupRoute as? StartupRoute.Main)?.degraded.orEmpty()) }
+        var reinstallHelps by remember { mutableStateOf(true) }
+        var reinstallRequested by remember { mutableStateOf(false) }
+        val reinstallScope = rememberCoroutineScope()
 
         // Sync pre-computed state to mainAppState for any other observers of the flow
         LaunchedEffect(startupRoute) {
@@ -558,6 +568,9 @@ fun main(args: Array<String>) {
                             LaunchedEffect(Unit) {
                                 appGraph.appUpdateService.checkOnStartup()
                             }
+                            LaunchedEffect(Unit) {
+                                reinstallHelps = reinstallStillHelps((startupRoute as? StartupRoute.Main)?.degraded.orEmpty())
+                            }
 
                             // Track whether the user is interacting by touch so hover-gated
                             // controls (e.g. pane close buttons) stay reachable; published
@@ -664,10 +677,19 @@ fun main(args: Array<String>) {
                                     LibraryDegradedLayout(
                                         problems = degradedProblems,
                                         onReinstall = {
-                                            libraryProblems = degradedProblems
-                                            libraryBlockedReason = null
-                                            showDatabaseUpdate = true
+                                            if (!reinstallRequested) {
+                                                reinstallRequested = true
+                                                reinstallScope.launch {
+                                                    // Back to normal if the restart did not happen, so the banner still works.
+                                                    try {
+                                                        requestLibraryReinstall(degradedProblems)
+                                                    } finally {
+                                                        reinstallRequested = false
+                                                    }
+                                                }
+                                            }
                                         },
+                                        reinstallHelps = reinstallHelps,
                                         onDismiss = { degradedProblems = emptyList() },
                                     ) { TabsContent() }
                                 }

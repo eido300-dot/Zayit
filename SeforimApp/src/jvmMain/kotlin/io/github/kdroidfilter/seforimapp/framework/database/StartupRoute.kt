@@ -39,8 +39,18 @@ internal fun routeStartup(
     versionCompatible: Boolean,
     databasePathOverridden: Boolean,
     repeatedAfterReinstall: Boolean,
+    reinstallRequested: List<LibraryProblem>? = null,
 ): StartupRoute {
     if (!onboardingFinished) return StartupRoute.Onboarding
+    if (reinstallRequested != null) {
+        // Asked for from the banner in the last session; the user already decided.
+        val problems = (reinstallRequested + health.problems).distinct()
+        return if (databasePathOverridden) {
+            StartupRoute.LibraryError(problems, BlockedReason.DatabasePathOverridden)
+        } else {
+            StartupRoute.Update(problems)
+        }
+    }
     if (health.needsReinstall) {
         return when {
             databasePathOverridden -> StartupRoute.LibraryError(health.problems, BlockedReason.DatabasePathOverridden)
@@ -60,6 +70,13 @@ internal fun reinstallMarker(
     problems: List<LibraryProblem>,
     databaseModified: Long?,
 ): String = problems.sorted().joinToString(",") + "@" + (databaseModified ?: -1L)
+
+/** Problems as stored in settings: their names, comma-separated. */
+internal fun encodeProblems(problems: List<LibraryProblem>): String = problems.joinToString(",") { it.name }
+
+/** The problems in [text]; unknown names (from another version) are dropped. */
+internal fun decodeProblems(text: String): List<LibraryProblem> =
+    text.split(',').mapNotNull { name -> LibraryProblem.entries.firstOrNull { it.name == name.trim() } }
 
 internal fun isRepeatedAfterReinstall(
     marker: String?,
