@@ -17,6 +17,6 @@ fun NucleusApplicationScope.OnBoardingWindow() {
         titleBarText = stringResource(Res.string.onboarding_title_bar),
         progress = ProgressBarState.progress,
     ) { navController ->
-        OnBoardingNavHost(navController = navController)
+        OnBoardingNavHost(navController = navController, onExitApplication = ::exitApplication)
     }
 }

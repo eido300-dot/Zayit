@@ -13,6 +13,7 @@ import io.github.kdroidfilter.seforimapp.features.onboarding.data.databaseFetche
 import io.github.kdroidfilter.seforimapp.features.onboarding.diskspace.AvailableDiskSpaceUseCase
 import io.github.kdroidfilter.seforimapp.features.onboarding.download.DownloadUseCase
 import io.github.kdroidfilter.seforimapp.features.onboarding.extract.ExtractUseCase
+import io.github.kdroidfilter.seforimapp.features.onboarding.installlocation.PortableInstallUseCase
 import io.github.kdroidfilter.seforimapp.features.onboarding.region.RegionConfigUseCase
 import io.github.kdroidfilter.seforimapp.features.onboarding.userprofile.UserProfileUseCase
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
@@ -41,6 +42,10 @@ object OnboardingBindings {
     @Provides
     @SingleIn(AppScope::class)
     fun provideAvailableDiskSpaceUseCase(): AvailableDiskSpaceUseCase = AvailableDiskSpaceUseCase()
+
+    @Provides
+    @SingleIn(AppScope::class)
+    fun providePortableInstallUseCase(): PortableInstallUseCase = PortableInstallUseCase()
 
     @Provides
     @SingleIn(AppScope::class)

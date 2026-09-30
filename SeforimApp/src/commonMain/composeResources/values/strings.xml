@@ -392,6 +392,48 @@
     <string name="installation_releases_hint">עמוד ההפצות האחרון</string>
     <string name="installation_releases_source">ניתן להוריד מ:</string>
 
+    <!-- Install location: this computer or an external drive -->
+    <string name="install_location_title">איפה להתקין את זית?</string>
+    <string name="install_location_local_title">במחשב זה</string>
+    <string name="install_location_local_desc">זית והספרייה יותקנו במחשב הזה, כרגיל.</string>
+    <string name="install_location_local_button">התקנה במחשב</string>
+    <string name="install_location_drive_title">בכונן חיצוני</string>
+    <string name="install_location_drive_desc">עותק של זית נוצר בדיסק-און-קי או בכונן חיצוני, ורץ ממנו בכל מחשב. הספרייה, ההערות וההגדרות נשמרים בכונן, ולא במחשב.</string>
+    <string name="install_location_drive_button">בחירת כונן</string>
+    <string name="install_location_checking">בודק את התיקייה שנבחרה…</string>
+    <string name="install_location_folder">תיקייה: %1$s</string>
+    <string name="install_location_ok">יש מספיק מקום: פנויים %1$s, נדרשים %2$s. זית יועתק לתיקייה Zayit בתוכה.</string>
+    <string name="install_location_copy_button">העתקה לכונן</string>
+    <string name="install_location_choose_again">בחירת תיקייה אחרת</string>
+    <string name="install_location_error_filesystem">מערכת הקבצים של הכונן (%1$s) לא מתאימה. FAT32 לא יכולה להכיל את קובץ הספרייה, וכונן רשת לא שומר עליה בבטחה. פרמטו את הכונן ל-exFAT או ל-NTFS (הפרמוט מוחק את כל מה שעליו), או בחרו כונן אחר.</string>
+    <string name="install_location_error_space">אין מספיק מקום בכונן: פנויים %1$s, נדרשים %2$s.</string>
+    <string name="install_location_error_not_writable">אי אפשר לכתוב לתיקייה הזו. בדקו שהכונן לא מוגן מפני כתיבה.</string>
+    <string name="install_location_error_inside_program">התיקייה נמצאת בתוך תיקיית התוכנה של זית. בחרו תיקייה בכונן החיצוני.</string>
+    <string name="install_location_error_path_too_long">הנתיב של התיקייה ארוך מדי. בחרו תיקייה קרובה יותר לשורש הכונן.</string>
+    <string name="install_location_error_already_exists">בתיקייה כבר יש פריט בשם Zayit שאינו עותק נייד של זית. הוא לא ישתנה. בחרו תיקייה אחרת, או שנו את שמו.</string>
+    <string name="install_location_error_unavailable">אי אפשר לבדוק את התיקייה או להעתיק אליה את זית. בדקו שהכונן מחובר. בהרצת פיתוח ההעתקה לא זמינה.</string>
+    <string name="install_location_existing">בתיקייה הזו כבר יש עותק נייד של זית. אפשר לעדכן את התוכנה שבו, והספרייה, ההערות וההגדרות יישמרו.</string>
+    <string name="install_location_update_button">עדכון התוכנה ושמירת הנתונים</string>
+    <string name="install_location_stale">נמצאה בתיקייה העתקה קודמת שלא הושלמה. אפשר למחוק אותה ולהמשיך.</string>
+    <string name="install_location_stale_button">מחיקה והמשך</string>
+    <string name="install_location_copying">מעתיק את זית לכונן…</string>
+    <string name="install_location_updating">מעדכן את התוכנה בכונן…</string>
+    <string name="install_location_finishing">מסיים את ההעתקה…</string>
+    <string name="install_location_cancel_button">ביטול</string>
+    <string name="install_location_done_title">העותק הנייד מוכן</string>
+    <string name="install_location_done">זית הועתק אל %1$s. סגרו את זית, ופתחו אותו מהתיקייה הזו בכונן. בהפעלה הראשונה מהכונן הספרייה תורד אל הכונן.</string>
+    <string name="install_location_done_update">התוכנה בכונן עודכנה והנתונים נשמרו. סגרו את זית, ופתחו אותו מ-%1$s.</string>
+    <string name="install_location_close_button">סגירת זית</string>
+    <string name="install_location_warning_eject">לפני ניתוק הכונן, סגרו את זית והוציאו את הכונן בבטחה.</string>
+    <string name="install_location_warning_format">פרמוט הכונן מוחק גם את ההערות וההדגשות. אל תמחקו את התיקייה Zayit אם אתם רוצים לשמור אותן.</string>
+    <string name="install_location_warning_usb2">בכונן USB 2.0 זית יעבוד לאט.</string>
+    <string name="install_location_warning_links">קישורי zayit:// נפתחים בזית שמותקן במחשב, ולא בעותק שבכונן.</string>
+    <string name="install_location_failed_not_executable">אי אפשר להריץ תוכנות מהכונן הזה, למשל כשהוא מחובר בלי הרשאת הרצה. ההעתקה בוטלה ושום דבר לא נשאר בכונן.</string>
+    <string name="install_location_failed_already_exists">בזמן ההעתקה נוצרה בתיקייה תיקייה בשם Zayit. ההעתקה בוטלה, והתיקייה הזו לא שונתה.</string>
+    <string name="install_location_failed_copy">ההעתקה נכשלה, ושום דבר לא השתנה בכונן. בדקו שהכונן מחובר ושיש בו מקום, ונסו שוב.</string>
+    <string name="install_location_failed_in_use">העותק שבכונן פתוח עכשיו, במחשב הזה או במחשב אחר. סגרו אותו ונסו שוב.</string>
+    <string name="install_location_failed_leftover">נשארה בכונן תיקייה מהעתקה או מעדכון קודמים (Zayit.partial או Zayit.old) שאי אפשר להסיר, וייתכן שהנתונים שלכם בתוכה. העבירו אותה ידנית למקום אחר ונסו שוב.</string>
+
     <!--Downloading-->
     <string name="onboarding_downloading_message">אנא המתן בזמן שאנו מורידים את מסד הנתונים</string>
     <string name="onboarding_file_selection">בחירת קבצים</string>
