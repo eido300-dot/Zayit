@@ -85,17 +85,20 @@ sealed interface TargetCheck {
 
     /**
      * An update stopped between its renames, and the copy's data folder is in [path]
-     * (`Zayit.partial` or `Zayit.old`). It is put back in place, never deleted.
+     * (`Zayit.partial` or `Zayit.old`). It is put back in place, never deleted; not while the drive
+     * cannot be written to ([isWritable]).
      */
     data class InterruptedUpdate(
         val path: String,
+        val isWritable: Boolean = true,
     ) : TargetCheck
 
     /**
-     * Like [InterruptedUpdate], but a `Zayit` folder stands in the way. Which of the two holds the
-     * user's data is unclear, so neither is changed: the user moves one of them by hand.
+     * `Zayit.partial` or `Zayit.old` ([path]) may hold a copy's data but cannot be put back: it is
+     * not a whole portable copy, or a `Zayit` folder stands in the way. Nothing is changed next to
+     * it; the user moves it by hand.
      */
-    data class LeftoverBesideCopy(
+    data class LeftoverInTheWay(
         val path: String,
     ) : TargetCheck
 

@@ -2,8 +2,6 @@ package io.github.kdroidfilter.seforimapp.features.onboarding.installlocation
 
 import io.github.kdroidfilter.seforimapp.features.onboarding.diskspace.AvailableDiskSpaceUseCase
 import io.github.kdroidfilter.seforimapp.framework.platform.currentExecutablePath
-import io.github.kdroidfilter.seforimapp.framework.portable.DriveLock
-import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_DATA_DIR_NAME
 import io.github.kdroidfilter.seforimapp.framework.portable.isReallyInside
 import io.github.kdroidfilter.seforimapp.framework.portable.syncDirectory
 import io.github.kdroidfilter.seforimapp.framework.portable.treeSize
@@ -76,8 +74,8 @@ class PortableInstallUseCase(
             withContext(ioDispatcher) {
                 val plan = requirePlan(targetParent)
                 if (Files.exists(plan.destination, NOFOLLOW_LINKS)) throw PortableInstallException(FailureReason.AlreadyExists)
-                // A new Zayit would stand in the way of putting back the copy whose data is aside.
-                if (interruptedUpdateOf(plan) != null) throw PortableInstallException(FailureReason.UpdateLeftover)
+                // A new Zayit would stand in the way of putting back a copy whose data may be aside.
+                if (mayHoldData(plan.staging) || mayHoldData(plan.previous)) throw PortableInstallException(FailureReason.UpdateLeftover)
                 clearStaging(plan.staging)
                 var committed = false
                 try {
@@ -114,7 +112,8 @@ class PortableInstallUseCase(
             withContext(ioDispatcher) {
                 val plan = requirePlan(targetParent)
                 if (!isPortableCopy(plan.destination)) throw PortableInstallException(FailureReason.Unavailable)
-                requireNotRunning(plan.destination)
+                // Asked now too, before the long copy.
+                whileNotRunning(plan.destination) {}
                 clearPrevious(plan.previous)
                 clearStaging(plan.staging)
                 var committed = false
@@ -122,8 +121,7 @@ class PortableInstallUseCase(
                     asInstallFailure {
                         stageProgram(plan, onProgress)
                         // Again: the copy may have been started from the drive while this one was staged.
-                        requireNotRunning(plan.destination)
-                        swapProgram(plan, move)
+                        whileNotRunning(plan.destination) { swapProgram(plan, move) }
                     }
                     committed = true
                 } finally {
@@ -151,8 +149,7 @@ class PortableInstallUseCase(
                     throw PortableInstallException(FailureReason.UpdateLeftover)
                 }
                 // The copy left aside can be started from there, and must not be moved while it runs.
-                requireNotRunning(leftover)
-                asInstallFailure { move(leftover, plan.destination) }
+                whileNotRunning(leftover) { asInstallFailure { move(leftover, plan.destination) } }
                 syncDirectory(targetParent)
                 discardStaging(plan.staging)
                 removePrevious(plan.previous)
@@ -171,8 +168,9 @@ class PortableInstallUseCase(
                 val room = writeAndSpace(plan, targetParent, store, isUpdate = true)
                 if (room is TargetCheck.Ok) found else room
             }
-            // Offered only where the renames or the removal it takes can work.
-            is TargetCheck.InterruptedUpdate, is TargetCheck.StalePartial -> if (canWrite(targetParent)) found else TargetCheck.NotWritable
+            // Offered only where the renames or the removal it takes can work; the data stays reported.
+            is TargetCheck.InterruptedUpdate -> if (canWrite(targetParent)) found else found.copy(isWritable = false)
+            is TargetCheck.StalePartial -> if (canWrite(targetParent)) found else TargetCheck.NotWritable
             else -> found
         }
     }
@@ -193,8 +191,15 @@ class PortableInstallUseCase(
     private fun existingCopy(plan: InstallPlan): TargetCheck? {
         val interrupted = interruptedUpdateOf(plan)
         val hasDestination = Files.exists(plan.destination, NOFOLLOW_LINKS)
+        // What may hold data but cannot be put back, and so blocks every step here (see mayHoldData).
+        val inTheWay =
+            if (interrupted != null) {
+                interrupted.takeIf { hasDestination }
+            } else {
+                listOf(plan.staging, plan.previous).firstOrNull(::mayHoldData)
+            }
         return when {
-            interrupted != null && hasDestination -> TargetCheck.LeftoverBesideCopy(interrupted.toString())
+            inTheWay != null -> TargetCheck.LeftoverInTheWay(inTheWay.toString())
             interrupted != null -> TargetCheck.InterruptedUpdate(interrupted.toString())
             isPortableCopy(plan.destination) -> TargetCheck.ExistingPortable(plan.destination.toString())
             hasDestination -> TargetCheck.AlreadyExists(plan.destination.toString())
@@ -203,8 +208,11 @@ class PortableInstallUseCase(
         }
     }
 
-    /** The folder an interrupted update left the copy's data in, if any: a whole portable copy. */
-    private fun interruptedUpdateOf(plan: InstallPlan): Path? = listOf(plan.staging, plan.previous).firstOrNull(::isPortableCopy)
+    /**
+     * The folder an interrupted update left the copy's data in, if any: a whole portable copy. Two
+     * of them are not one update's leftover, and which holds the user's data is unclear.
+     */
+    private fun interruptedUpdateOf(plan: InstallPlan): Path? = listOf(plan.staging, plan.previous).filter(::isPortableCopy).singleOrNull()
 
     /** Room for the program, plus the library for a new copy; an update keeps the library it has. */
     private fun writeAndSpace(
@@ -222,17 +230,6 @@ class PortableInstallUseCase(
 
     private fun requirePlan(targetParent: Path): InstallPlan =
         executable()?.let { planInstall(it, targetParent) } ?: throw PortableInstallException(FailureReason.Unavailable)
-
-    /** Refuses to move the portable copy in [copy] while it runs, on this computer or another one. */
-    private fun requireNotRunning(copy: Path) {
-        when (val lock = DriveLock.tryAcquire(copy.resolve(PORTABLE_DATA_DIR_NAME))) {
-            // Released at once: Windows cannot rename a folder while a file in it is open.
-            is DriveLock.Result.Acquired -> lock.lock.close()
-            DriveLock.Result.InUse -> throw PortableInstallException(FailureReason.DriveInUse)
-            // A drive without locks: the rename fails on its own if the copy is running.
-            is DriveLock.Result.Unavailable -> Unit
-        }
-    }
 
     /** Copies the program into a fresh staging folder and checks that it can run from there. */
     private suspend fun stageProgram(

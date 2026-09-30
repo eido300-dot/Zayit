@@ -1,5 +1,7 @@
 package io.github.kdroidfilter.seforimapp.features.onboarding.installlocation
 
+import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
+import io.github.kdroidfilter.seforimapp.framework.portable.DriveLock
 import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_DATA_DIR_NAME
 import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_MARKER_NAME
 import io.github.kdroidfilter.seforimapp.framework.portable.RetryPolicy
@@ -120,6 +122,27 @@ internal fun clearPrevious(previous: Path) {
     if (mayHoldData(previous) || !deleteTree(previous) || Files.exists(previous, NOFOLLOW_LINKS)) {
         throw PortableInstallException(FailureReason.UpdateLeftover)
     }
+}
+
+/**
+ * Runs [block], which moves the portable copy in [copy], unless that copy runs, on this computer or
+ * another one. The drive lock is held meanwhile, so the copy cannot start in between; except on
+ * Windows, which cannot rename a folder while a file in it is open, and refuses to rename a running
+ * copy by itself.
+ */
+internal inline fun <T> whileNotRunning(
+    copy: Path,
+    block: () -> T,
+): T {
+    val lock =
+        when (val result = DriveLock.tryAcquire(copy.resolve(PORTABLE_DATA_DIR_NAME))) {
+            is DriveLock.Result.Acquired -> result.lock
+            DriveLock.Result.InUse -> throw PortableInstallException(FailureReason.DriveInUse)
+            // A drive without locks: only Windows can tell, by refusing the rename.
+            is DriveLock.Result.Unavailable -> null
+        }
+    if (PlatformInfo.isWindows) lock?.close()
+    return lock.use { block() }
 }
 
 /** Removes the previous program once the copy's data is out of it; kept if it may still hold data. */

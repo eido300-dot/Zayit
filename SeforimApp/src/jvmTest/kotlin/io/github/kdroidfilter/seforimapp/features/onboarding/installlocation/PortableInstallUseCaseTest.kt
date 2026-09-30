@@ -147,6 +147,18 @@ class PortableInstallUseCaseTest {
         }
 
     @Test
+    fun `a data folder that is a link in a portable program is not copied either`() =
+        runBlocking {
+            createProgram()
+            Files.createDirectories(root.resolve("elsewhere/data"))
+            Files.createSymbolicLink(programDir.resolve(PORTABLE_DATA_DIR_NAME), root.resolve("elsewhere/data"))
+
+            useCase().install(drive) { _, _ -> }
+
+            assertTrue(isPortableCopy(destination))
+        }
+
+    @Test
     fun `progress reaches the total`() =
         runBlocking {
             createProgram()
@@ -398,7 +410,7 @@ class PortableInstallUseCaseTest {
             createExistingCopy()
             createCopyData(previous, "older notes")
 
-            assertEquals(TargetCheck.LeftoverBesideCopy(previous.toString()), useCase().check(drive))
+            assertEquals(TargetCheck.LeftoverInTheWay(previous.toString()), useCase().check(drive))
             val update = assertFailsWith<PortableInstallException> { useCase().updateProgram(drive) { _, _ -> } }
             val recovery = assertFailsWith<PortableInstallException> { useCase().recoverInterruptedUpdate(drive) }
 
@@ -416,6 +428,7 @@ class PortableInstallUseCaseTest {
             Files.createDirectories(previous)
             Files.createSymbolicLink(previous.resolve(PORTABLE_DATA_DIR_NAME), root.resolve("somewhere"))
 
+            assertEquals(TargetCheck.LeftoverInTheWay(previous.toString()), useCase().check(drive))
             val failure = assertFailsWith<PortableInstallException> { useCase().updateProgram(drive) { _, _ -> } }
 
             assertEquals(FailureReason.UpdateLeftover, failure.reason)
@@ -452,7 +465,9 @@ class PortableInstallUseCaseTest {
     fun `leftovers are offered for recovery or removal only where the drive can be written to`() =
         runBlocking {
             leaveNotesInPrevious()
-            assertEquals(TargetCheck.NotWritable, useCase(canWrite = { false }).check(drive))
+            // Where the notes are is still said.
+            val readOnly = useCase(canWrite = { false })
+            assertEquals(TargetCheck.InterruptedUpdate(previous.toString(), isWritable = false), readOnly.check(drive))
 
             useCase().recoverInterruptedUpdate(drive)
             Files.createDirectories(drive.resolve("other/$PORTABLE_FOLDER_NAME$STAGING_SUFFIX"))
@@ -460,26 +475,33 @@ class PortableInstallUseCaseTest {
         }
 
     @Test
-    fun `a leftover without the portable marker is not taken for an interrupted update, and is kept`() =
+    fun `a leftover with a data folder but no marker is reported as in the way, and kept`() =
         runBlocking {
             createProgram()
             Files.createDirectories(staging.resolve(PORTABLE_DATA_DIR_NAME))
             staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").writeText("my notes")
 
-            assertEquals(TargetCheck.StalePartial(staging.toString()), useCase().check(drive))
+            assertEquals(TargetCheck.LeftoverInTheWay(staging.toString()), useCase().check(drive))
             assertFalse(useCase().discardStalePartial(drive))
             assertEquals("my notes", staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
         }
 
     @Test
-    fun `a new copy's data folder appears only with its marker`() {
-        val folder = Files.createDirectories(root.resolve("new-copy"))
+    fun `a new copy's data folder is made aside, so one stopped halfway is only a stale copy`() =
+        runBlocking {
+            createProgram()
+            val folder = Files.createDirectories(root.resolve("new-copy"))
+            createDataFolder(folder)
+            assertTrue(isPortableCopy(folder))
+            val names = Files.list(folder).use { entries -> entries.map { it.fileName.toString() }.toList() }
+            assertEquals(listOf(PORTABLE_DATA_DIR_NAME), names)
+            // Stopped before the rename: the folder being made holds only the marker, and goes.
+            Files.createDirectories(staging.resolve("$PORTABLE_DATA_DIR_NAME$STAGING_SUFFIX"))
+            staging.resolve("$PORTABLE_DATA_DIR_NAME$STAGING_SUFFIX/$PORTABLE_MARKER_NAME").writeText("")
 
-        createDataFolder(folder)
-
-        assertTrue(isPortableCopy(folder))
-        Files.list(folder).use { entries -> assertEquals(listOf(PORTABLE_DATA_DIR_NAME), entries.map { it.fileName.toString() }.toList()) }
-    }
+            assertEquals(TargetCheck.StalePartial(staging.toString()), useCase().check(drive))
+            assertTrue(useCase().discardStalePartial(drive))
+        }
 
     @Test
     fun `a previous program left without notes is removed, and the update goes on`() =
@@ -553,6 +575,55 @@ class PortableInstallUseCaseTest {
             assertEquals(FailureReason.UpdateLeftover, failure.reason)
             assertEquals("keep", destination.resolve("mine.txt").readText())
             assertEquals("my notes", staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+        }
+
+    @Test
+    fun `two whole copies left aside are not guessed between`() =
+        runBlocking {
+            createProgram()
+            createCopyData(staging, "newer notes")
+            createCopyData(previous, "older notes")
+
+            assertEquals(TargetCheck.LeftoverInTheWay(staging.toString()), useCase().check(drive))
+            val failure = assertFailsWith<PortableInstallException> { useCase().recoverInterruptedUpdate(drive) }
+
+            assertEquals(FailureReason.UpdateLeftover, failure.reason)
+            assertEquals("newer notes", staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertEquals("older notes", previous.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertFalse(Files.exists(destination, NOFOLLOW_LINKS))
+        }
+
+    @Test
+    fun `a new copy is refused next to a previous program that may hold data`() =
+        runBlocking {
+            createProgram()
+            Files.createDirectories(previous)
+            Files.createSymbolicLink(previous.resolve(PORTABLE_DATA_DIR_NAME), root.resolve("somewhere"))
+
+            assertEquals(TargetCheck.LeftoverInTheWay(previous.toString()), useCase().check(drive))
+            val failure = assertFailsWith<PortableInstallException> { useCase().install(drive) { _, _ -> } }
+
+            assertEquals(FailureReason.UpdateLeftover, failure.reason)
+            assertFalse(Files.exists(destination, NOFOLLOW_LINKS))
+        }
+
+    @Test
+    fun `the copy cannot be started while its program is swapped`() =
+        runBlocking {
+            if (System.getProperty("os.name").orEmpty().startsWith("Windows")) return@runBlocking
+            createProgram()
+            createExistingCopy()
+            val dataDir = destination.resolve(PORTABLE_DATA_DIR_NAME)
+            val seen = mutableListOf<DriveLock.Result>()
+            val watching: (Path, Path) -> Unit = { from, to ->
+                if (seen.isEmpty()) seen += DriveLock.tryAcquire(dataDir)
+                moveForInstall(from, to)
+            }
+
+            useCase(move = watching).updateProgram(drive) { _, _ -> }
+
+            assertEquals(listOf<DriveLock.Result>(DriveLock.Result.InUse), seen)
+            assertIs<DriveLock.Result.Acquired>(DriveLock.tryAcquire(dataDir)).lock.close()
         }
 
     @Test

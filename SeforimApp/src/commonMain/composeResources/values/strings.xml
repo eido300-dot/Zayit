@@ -417,7 +417,8 @@
     <string name="install_location_stale">נמצאה בתיקייה העתקה קודמת שלא הושלמה. אפשר למחוק אותה ולהמשיך.</string>
     <string name="install_location_stale_button">מחיקה והמשך</string>
     <string name="install_location_interrupted">עדכון קודם של העותק שבכונן נקטע באמצע, והנתונים שלכם (הספרייה, ההערות וההגדרות) נמצאים עכשיו בתיקייה %1$s. אל תמחקו אותה. אפשר להחזיר את העותק למקומו, בלי לאבד דבר.</string>
-    <string name="install_location_leftover_beside_copy">בתיקייה יש גם תיקייה בשם Zayit וגם את %1$s, שנשארה מעדכון שנקטע ובה נתונים של עותק נייד (ספרייה, הערות והגדרות). כדי שלא יאבדו נתונים, זית לא ישנה אף אחת מהן. העבירו אחת מהן ידנית למקום אחר, ובחרו שוב את התיקייה.</string>
+    <string name="install_location_leftover_in_the_way">בתיקייה נשארה התיקייה %1$s מהעתקה או מעדכון קודמים, ואולי יש בה נתונים של עותק נייד (ספרייה, הערות והגדרות). כדי שלא יאבדו נתונים, זית לא ישנה אותה ולא יעתיק או יעדכן לידה. העבירו אותה ידנית למקום אחר, ובחרו שוב את התיקייה.</string>
+    <string name="install_location_interrupted_read_only">עדכון קודם של העותק שבכונן נקטע באמצע, והנתונים שלכם (הספרייה, ההערות וההגדרות) נמצאים עכשיו בתיקייה %1$s. אל תמחקו אותה. אי אפשר לכתוב לכונן כרגע, ולכן אי אפשר להחזיר את העותק למקומו. בטלו את ההגנה מפני כתיבה, ובחרו שוב את התיקייה.</string>
     <string name="install_location_recover_button">החזרת העותק למקומו</string>
     <string name="install_location_recheck_button">בדיקה חוזרת</string>
     <string name="install_location_back_button">חזרה</string>

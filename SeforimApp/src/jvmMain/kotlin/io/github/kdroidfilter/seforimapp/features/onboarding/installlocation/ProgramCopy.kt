@@ -1,13 +1,16 @@
 package io.github.kdroidfilter.seforimapp.features.onboarding.installlocation
 
+import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
 import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_DATA_DIR_NAME
 import io.github.kdroidfilter.seforimapp.framework.portable.forceToDisk
 import io.github.kdroidfilter.seforimapp.logger.warnln
 import kotlinx.coroutines.ensureActive
+import java.io.Closeable
 import java.io.FileInputStream
 import java.io.IOException
 import java.nio.channels.FileChannel
 import java.nio.file.AccessDeniedException
+import java.nio.file.FileStore
 import java.nio.file.FileSystemException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
@@ -21,7 +24,7 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileAttribute
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermissions
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.CoroutineContext
 
 /** How much of a file is copied between two checks for cancellation and two progress reports. */
@@ -56,6 +59,8 @@ internal fun listProgramEntries(source: Path): List<ProgramEntry> {
                 file: Path,
                 attrs: BasicFileAttributes,
             ): FileVisitResult {
+                // The data folder of a portable program, even as a link or a file: the copy makes its own.
+                if (file == skippedData) return FileVisitResult.CONTINUE
                 val relative = source.relativize(file)
                 val isTopLevelUninstaller = relative.nameCount == 1 && isUninstaller(relative.toString())
                 when {
@@ -155,74 +160,109 @@ internal fun copyFileDurably(
     from: Path,
     to: Path,
     onCopied: (bytes: Long) -> Unit,
-) = copyFileDurably(from, to, FileChannel::force, onCopied)
+) = copyFileDurably(from, to, DeviceFlush.forDrive(to.parent), onCopied)
 
-/** [copyFileDurably] with the flush of [DeviceFlush] replaced, for tests. */
+/** [copyFileDurably] with the given way to flush, for tests. */
 @Throws(IOException::class)
 internal fun copyFileDurably(
     from: Path,
     to: Path,
-    force: (FileChannel, metadata: Boolean) -> Unit,
+    flush: DeviceFlush,
     onCopied: (bytes: Long) -> Unit,
 ) {
     FileChannel.open(from, READ, NOFOLLOW_LINKS).use { input ->
         FileChannel.open(to, setOf(CREATE_NEW, WRITE), *permissionsOf(from)).use { output ->
-            val flush = DeviceFlush(output, to, force)
-            val size = input.size()
-            var position = 0L
-            while (position < size) {
-                val copied = input.transferTo(position, minOf(COPY_CHUNK_BYTES, size - position), output)
-                if (copied <= 0) throw IOException("$from got shorter while it was copied")
-                position += copied
-                flush.flush(metadata = false)
-                onCopied(copied)
-            }
-            flush.flush(metadata = true)
+            flush.open(output, to).use { fileFlush -> copyChunks(input, output, from, fileFlush, onCopied) }
         }
     }
+}
+
+private fun copyChunks(
+    input: FileChannel,
+    output: FileChannel,
+    from: Path,
+    fileFlush: FileFlush,
+    onCopied: (bytes: Long) -> Unit,
+) {
+    val size = input.size()
+    var position = 0L
+    while (position < size) {
+        val copied = input.transferTo(position, minOf(COPY_CHUNK_BYTES, size - position), output)
+        if (copied <= 0) throw IOException("$from got shorter while it was copied")
+        position += copied
+        // The last chunk takes the file's metadata along: one flush per chunk.
+        fileFlush.flush(metadata = position == size)
+        onCopied(copied)
+    }
+    if (size == 0L) fileFlush.flush(metadata = true)
 }
 
 /**
- * Flushes what [output] wrote to [file] through that same channel. A failure is the drive's write
- * error, which Linux reports only once per file, so it is never retried through another handle.
+ * How the files written on one drive are flushed. A file is flushed through the channel that wrote
+ * it: a failure is the drive's write error, which Linux reports only once per file, so it is never
+ * retried through another handle.
  *
- * The one exception is macOS, where `force` asks for a full flush (`F_FULLFSYNC`) that some file
- * systems refuse, as [forceToDisk] allows. Refused on the file's first flush, it is replaced by a
- * plain `fsync` for the rest of the file; after a flush went through, a failure is an error there
- * too.
+ * On macOS `force` asks for a full flush (`F_FULLFSYNC`), which some file systems refuse, as
+ * [forceToDisk] allows. Whether a drive does is found once, on a scratch file ([forDrive]), so
+ * that a refusal is never confused with a write error; such a drive gets a plain `fsync` instead.
  */
 internal class DeviceFlush(
-    private val output: FileChannel,
-    private val file: Path,
+    private val fullFlushRefused: Boolean = false,
     private val force: (FileChannel, metadata: Boolean) -> Unit = FileChannel::force,
-    private val fullFlushMayBeRefused: Boolean = IS_MAC_OS,
 ) {
-    private var flushed = false
-    private var fullFlushRefused = false
-
+    /** Starts flushing [file], just created and written through [output]. */
     @Throws(IOException::class)
-    fun flush(metadata: Boolean) {
-        if (!fullFlushRefused) {
-            try {
-                force(output, metadata)
-                flushed = true
-                return
+    fun open(
+        output: FileChannel,
+        file: Path,
+    ): FileFlush {
+        if (!fullFlushRefused) return FileFlush(output, syncHandle = null, force)
+        // `fsync` needs a second handle, opened once and never through a link put in the file's place.
+        if (!Files.isRegularFile(file, NOFOLLOW_LINKS)) throw IOException("$file was replaced while it was copied")
+        return FileFlush(output, FileInputStream(file.toFile()), force)
+    }
+
+    companion object {
+        /** Per drive, whether it refuses a full flush; only asked on macOS. */
+        private val refusingDrives = ConcurrentHashMap<FileStore, Boolean>()
+
+        /** The flush for files written in [dir]. */
+        @Throws(IOException::class)
+        fun forDrive(dir: Path): DeviceFlush {
+            if (!PlatformInfo.isMacOS) return DeviceFlush()
+            return DeviceFlush(fullFlushRefused = refusingDrives.getOrPut(Files.getFileStore(dir)) { refusesFullFlush(dir) })
+        }
+
+        private fun refusesFullFlush(dir: Path): Boolean {
+            val probe = Files.createTempFile(dir, ".zayit-flush", null)
+            return try {
+                FileChannel.open(probe, WRITE).use { it.force(true) }
+                false
             } catch (e: IOException) {
-                if (flushed || !fullFlushMayBeRefused) throw e
-                fullFlushRefused = true
-                if (fullFlushRefusalLogged.compareAndSet(false, true)) {
-                    warnln(e) { "[portable-install] full flush refused by this drive, falling back to fsync" }
-                }
+                warnln(e) { "[portable-install] this drive refuses a full flush, using fsync" }
+                true
+            } finally {
+                Files.deleteIfExists(probe)
             }
         }
-        // A read handle is enough for fsync, so a read-only program file is flushed too.
-        FileInputStream(file.toFile()).use { it.fd.sync() }
     }
 }
 
-private val IS_MAC_OS = System.getProperty("os.name").orEmpty().startsWith("Mac", ignoreCase = true)
+/** Flushes one file (see [DeviceFlush]): through its [output], or through [syncHandle] with `fsync`. */
+internal class FileFlush(
+    private val output: FileChannel,
+    private val syncHandle: FileInputStream?,
+    private val force: (FileChannel, metadata: Boolean) -> Unit,
+) : Closeable {
+    @Throws(IOException::class)
+    fun flush(metadata: Boolean) {
+        if (syncHandle != null) syncHandle.fd.sync() else force(output, metadata)
+    }
 
-private val fullFlushRefusalLogged = AtomicBoolean(false)
+    override fun close() {
+        syncHandle?.close()
+    }
+}
 
 /** The permission bits of [file] as a creation attribute, where the file system has them (not Windows). */
 private fun permissionsOf(file: Path): Array<FileAttribute<*>> {

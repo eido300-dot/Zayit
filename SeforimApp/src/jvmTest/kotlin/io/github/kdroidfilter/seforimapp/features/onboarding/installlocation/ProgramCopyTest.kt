@@ -6,6 +6,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.nio.file.StandardOpenOption.WRITE
 import java.nio.file.attribute.PosixFilePermissions
 import kotlin.io.path.createTempDirectory
@@ -42,27 +43,38 @@ class ProgramCopyTest {
     }
 
     @Test
-    fun `each chunk is flushed to the drive before it is reported`() {
+    fun `each chunk is flushed to the drive before it is reported, the last one with the metadata`() {
         val from = Files.write(root.resolve("large.bin"), ByteArray(LARGE_FILE_BYTES))
         val events = mutableListOf<String>()
+        val recording =
+            DeviceFlush { channel, metadata ->
+                channel.force(metadata)
+                events += "flush($metadata)"
+            }
 
-        val force = { channel: FileChannel, metadata: Boolean ->
-            channel.force(metadata)
-            events += "flush($metadata)"
-        }
+        copyFileDurably(from, root.resolve("large-copy.bin"), recording) { events += "report" }
 
-        copyFileDurably(from, root.resolve("large-copy.bin"), force) { events += "report" }
+        // 20 MB: two full chunks and a partial one.
+        assertEquals(listOf("flush(false)", "report", "flush(false)", "report", "flush(true)", "report"), events)
+    }
 
-        // 20 MB: two full chunks and a partial one, then the file's metadata.
-        val chunk = listOf("flush(false)", "report")
-        assertEquals(chunk + chunk + chunk + "flush(true)", events)
+    @Test
+    fun `an empty file is flushed too`() {
+        val from = Files.write(root.resolve("empty.bin"), ByteArray(0))
+        val events = mutableListOf<String>()
+
+        val recording = DeviceFlush { _, metadata -> events += "flush($metadata)" }
+
+        copyFileDurably(from, root.resolve("empty-copy.bin"), recording) { events += "report" }
+
+        assertEquals(listOf("flush(true)"), events)
     }
 
     @Test
     fun `a failed flush fails the copy, as the drive's write error it is`() {
         val from = Files.write(root.resolve("large.bin"), ByteArray(LARGE_FILE_BYTES))
         var reports = 0
-        val failing = { _: FileChannel, _: Boolean -> throw IOException("No space left on device") }
+        val failing = DeviceFlush { _, _ -> throw IOException("No space left on device") }
 
         val failure = assertFailsWith<IOException> { copyFileDurably(from, root.resolve("large-copy.bin"), failing) { reports++ } }
 
@@ -71,36 +83,38 @@ class ProgramCopyTest {
     }
 
     @Test
-    fun `a full flush refused from the start falls back to fsync where that may happen`() {
-        val file = Files.write(root.resolve("flushed.bin"), byteArrayOf(1))
-        var calls = 0
-        val refusing = { _: FileChannel, _: Boolean ->
-            calls++
-            throw IOException("refused")
+    fun `a drive that refuses a full flush gets fsync instead, for a read-only file too`() {
+        val from = Files.write(root.resolve("large.bin"), ByteArray(LARGE_FILE_BYTES))
+        if ("posix" in FileSystems.getDefault().supportedFileAttributeViews()) {
+            Files.setPosixFilePermissions(from, PosixFilePermissions.fromString("r--r--r--"))
         }
-        FileChannel.open(file, WRITE).use { channel ->
-            val flush = DeviceFlush(channel, file, refusing, fullFlushMayBeRefused = true)
+        val refusing = DeviceFlush(fullFlushRefused = true) { _, _ -> error("the full flush is not asked for") }
+        var copied = 0L
 
-            flush.flush(metadata = false)
-            flush.flush(metadata = true)
-        }
+        copyFileDurably(from, root.resolve("large-copy.bin"), refusing) { copied += it }
 
-        assertEquals(1, calls)
+        assertEquals(LARGE_FILE_BYTES.toLong(), copied)
     }
 
     @Test
-    fun `after a flush went through, a failed one is an error even where a full flush may be refused`() {
-        val file = Files.write(root.resolve("flushed.bin"), byteArrayOf(1))
-        var calls = 0
-        val failingAfterFirst = { _: FileChannel, _: Boolean ->
-            if (++calls > 1) throw IOException("I/O error")
-        }
-        FileChannel.open(file, WRITE).use { channel ->
-            val flush = DeviceFlush(channel, file, failingAfterFirst, fullFlushMayBeRefused = true)
-            flush.flush(metadata = false)
+    fun `fsync is never done through a link put in the copied file's place`() {
+        val file = root.resolve("copied.bin")
+        FileChannel.open(file, setOf(StandardOpenOption.CREATE_NEW, WRITE)).use { channel ->
+            Files.delete(file)
+            Files.createSymbolicLink(file, Files.write(root.resolve("someone-else.bin"), byteArrayOf(1)))
 
-            assertFailsWith<IOException> { flush.flush(metadata = true) }
+            assertFailsWith<IOException> { DeviceFlush(fullFlushRefused = true).open(channel, file) }
         }
+    }
+
+    @Test
+    fun `finding how to flush a drive leaves nothing behind`() {
+        val flush = DeviceFlush.forDrive(root)
+
+        FileChannel.open(Files.write(root.resolve("flushed.bin"), byteArrayOf(1)), WRITE).use { channel ->
+            flush.open(channel, root.resolve("flushed.bin")).use { it.flush(metadata = true) }
+        }
+        Files.list(root).use { entries -> assertEquals(listOf("flushed.bin"), entries.map { it.fileName.toString() }.toList()) }
     }
 
     @Test
