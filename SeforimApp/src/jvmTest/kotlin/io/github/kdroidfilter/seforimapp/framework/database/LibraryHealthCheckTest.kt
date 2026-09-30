@@ -275,12 +275,15 @@ class LibraryHealthCheckTest {
     }
 
     @Test
-    fun `a check that could not run is not a damaged database`() {
-        assertEquals(emptyList(), checkLibraryHealth(files, FixedProbe(BookTableState.Inconclusive), false).problems)
-        assertEquals(
-            listOf(LibraryProblem.DatabaseUnreadable),
-            checkLibraryHealth(files, FixedProbe(BookTableState.Unreadable), false).problems,
-        )
+    fun `a check that could not run is not a damaged database, nor a conclusive check`() {
+        val inconclusive = checkLibraryHealth(files, FixedProbe(BookTableState.Inconclusive), false)
+        assertEquals(emptyList(), inconclusive.problems)
+        assertFalse(inconclusive.conclusive, "nothing is ruled out")
+        assertFalse(checkRequiredParts(files, FixedProbe(BookTableState.Inconclusive)).conclusive)
+        assertTrue(checkRequiredParts(files, FixedProbe(BookTableState.HasBooks)).conclusive)
+        val unreadable = checkLibraryHealth(files, FixedProbe(BookTableState.Unreadable), false)
+        assertEquals(listOf(LibraryProblem.DatabaseUnreadable), unreadable.problems)
+        assertTrue(unreadable.conclusive)
     }
 
     @Test

@@ -6,7 +6,8 @@ sealed interface StartupRoute {
 
     /**
      * The main window. Missing optional parts are found once it is up, and shown in its banner.
-     * [libraryChecked] is false when the startup check failed and the app opened without it.
+     * [libraryChecked] is false when the startup check failed or could not look at the book table, and
+     * the app opened without it, or when this stands in for a copy that found the drive in use.
      */
     data class Main(
         val libraryChecked: Boolean,
@@ -62,7 +63,7 @@ internal fun routeStartup(
         }
     }
     if (!versionCompatible) return StartupRoute.Update(emptyList())
-    return StartupRoute.Main(libraryChecked = true)
+    return StartupRoute.Main(libraryChecked = health.conclusive)
 }
 
 /**

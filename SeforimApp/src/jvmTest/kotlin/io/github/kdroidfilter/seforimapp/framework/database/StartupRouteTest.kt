@@ -56,6 +56,11 @@ class StartupRouteTest {
     }
 
     @Test
+    fun `a book table that could not be looked at opens the main window unchecked`() {
+        assertEquals(StartupRoute.Main(libraryChecked = false), route(health = LibraryHealth(emptyList(), conclusive = false)))
+    }
+
+    @Test
     fun `broken database offers a reinstall listing the problems`() {
         assertEquals(StartupRoute.Update(listOf(LibraryProblem.DatabaseTruncated)), route(health = truncated))
     }
@@ -101,7 +106,13 @@ class StartupRouteTest {
             installed: Boolean = false,
             portable: Boolean = false,
             readBack: Boolean = false,
-        ) = canForgetReinstall(problems, checked, installed, portable, readBack)
+        ) = canForgetReinstall(
+            problems = problems,
+            libraryChecked = checked,
+            installedThisSession = installed,
+            isPortable = portable,
+            readBackIntact = readBack,
+        )
 
         assertTrue(forget())
         assertFalse(forget(problems = listOf(LibraryProblem.TextIndexMissing)))

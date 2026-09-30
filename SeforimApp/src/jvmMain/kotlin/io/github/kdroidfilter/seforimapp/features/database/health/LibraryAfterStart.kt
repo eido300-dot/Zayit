@@ -67,7 +67,8 @@ internal suspend fun reinstallHelpsFor(
             val database = installedDatabase() ?: return@withContext true
             !isRepeatedAfterReinstall(AppSettings.getLastReinstallMarker(), problems, modifiedTime(database))
         }
-    }.getOrDefault(true)
+    }.onFailure { e -> errorln(e) { "[LibraryHealth] the last reinstall could not be read; offering a reinstall" } }
+        .getOrDefault(true)
 
 /**
  * Reads the installed library back once, when needed (see [shouldVerifyLibrary]), and decides
@@ -77,8 +78,8 @@ internal suspend fun reinstallHelpsFor(
  * Runs its file work on the IO dispatcher.
  *
  * @param installedThisSession true when this session showed onboarding or the reinstall window.
- * @param libraryChecked false when the startup check or [checkOptionalLibraryParts] failed, so
- *   nothing is known to be fine and the last reinstall is not forgotten.
+ * @param libraryChecked false when the startup check or [checkOptionalLibraryParts] failed, or the
+ *   book table could not be looked at, so nothing is known to be fine and the last reinstall is not forgotten.
  */
 suspend fun checkLibraryAfterStart(
     installedThisSession: Boolean,
@@ -97,7 +98,7 @@ suspend fun checkLibraryAfterStart(
             } else {
                 errorln(e) { "[LibraryVerify] the check failed; carrying on without it" }
             }
-        }.getOrElse { LibraryAfterStart(emptyList(), true) }
+        }.getOrElse { LibraryAfterStart(emptyList(), reinstallHelpsFor(degraded, ioDispatcher)) }
 
 /** Verification starts this long after launch, so it does not compete with the first searches for the drive. */
 private const val VERIFY_START_DELAY_MILLIS = 30_000L
