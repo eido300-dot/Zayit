@@ -41,12 +41,13 @@ data class LibraryAfterStart(
  * Checks the search indexes and the dictionary once the main window is up. They only degrade the
  * app, so the first window does not wait for them: the check before it covers only the database and
  * the catalog. Never throws: it runs in a launched effect, so a failure is logged and the result is
- * null, which proves nothing about the library. Runs its file work on the IO dispatcher.
+ * null, which proves nothing about the library; so is the result when no database is installed. Runs
+ * its file work on the IO dispatcher.
  */
 internal suspend fun checkOptionalLibraryParts(ioDispatcher: CoroutineDispatcher = Dispatchers.IO): List<LibraryProblem>? =
     runSuspendCatching {
         withContext(ioDispatcher) {
-            val database = installedDatabase() ?: return@withContext emptyList<LibraryProblem>()
+            val database = installedDatabase() ?: return@withContext null
             checkOptionalParts(libraryFilesFor(database))
         }
     }.onFailure { e -> errorln(e) { "[LibraryHealth] the indexes and the dictionary could not be checked; carrying on without them" } }

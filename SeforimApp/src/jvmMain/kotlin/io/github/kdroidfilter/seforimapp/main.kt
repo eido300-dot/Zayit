@@ -153,6 +153,10 @@ private fun readStartupRoute(): StartupRoute {
         val marker = reinstallMarker(route.problems, modified)
         if (marker != AppSettings.getLastReinstallMarker()) AppSettings.setLastReinstallMarker(marker)
     }
+    // An install may run now, and its session may never reach the main window (the installer can be
+    // closed on its last screen). A reinstall of the same version has the same fingerprint, so the
+    // last read-back is forgotten here, or the next launch would take it for this library's.
+    if (route is StartupRoute.Update && AppSettings.getVerifiedLibrary() != null) AppSettings.setVerifiedLibrary(null)
     if (!health.isHealthy) warnln { "[startup] library problems: ${health.problems}, route: $route" }
     return route
 }
