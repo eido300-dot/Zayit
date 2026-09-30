@@ -256,6 +256,10 @@ class BookContentViewModel(
                 "scroll=(${persistedBookState?.contentScrollIndex},${persistedBookState?.contentScrollOffset})"
         }
 
+        // Show the loader rather than the Home view until the book below is opened: a restored tab
+        // would otherwise flash Home while root categories load. loadBookById clears it in a finally.
+        if (bookIdToOpen != null) stateManager.setLoading(true)
+
         viewModelScope.launch {
             // Load root categories
             navigationUseCase.loadRootCategories()

@@ -9,6 +9,7 @@ import io.github.kdroidfilter.seforimapp.core.coroutines.runSuspendCatching
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.framework.desktop.DesktopManager
 import io.github.kdroidfilter.seforimapp.framework.di.AppGraph
+import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
 import io.github.kdroidfilter.seforimapp.logger.debugln
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
@@ -69,7 +70,9 @@ object SessionManager {
 
         runCatching {
             val bytes = proto.encodeToByteArray(DesktopsState.serializer(), desktopsState)
-            desktopsFile().writeBytes(bytes)
+            // Atomic replace: an interrupted write (update installer, kill) must not leave a
+            // truncated file, which would fail to decode and be deleted on the next launch.
+            desktopsFile().writeAtomically { it.write(bytes) }
         }
     }
 
@@ -168,7 +171,7 @@ object SessionManager {
             // Save in new format and delete legacy file
             runCatching {
                 val newBytes = proto.encodeToByteArray(DesktopsState.serializer(), state)
-                desktopsF.writeBytes(newBytes)
+                desktopsF.writeAtomically { it.write(newBytes) }
                 legacyF.delete()
             }
 
