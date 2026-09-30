@@ -15,13 +15,17 @@ import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.attribute.BasicFileAttributes
 
-/** The data folder and its marker, which is what makes the copy start in portable mode. */
+/**
+ * The data folder and its marker, which is what makes the copy start in portable mode. Built aside
+ * and renamed into place, so a data folder is never seen without its marker (see [isPortableCopy]).
+ */
 internal fun createDataFolder(staging: Path) {
-    val dataDir = staging.resolve(PORTABLE_DATA_DIR_NAME)
-    Files.createDirectory(dataDir)
-    writeDurably(dataDir.resolve(PORTABLE_MARKER_NAME), ByteArray(0))
-    syncDirectory(dataDir)
+    val building = Files.createDirectory(staging.resolve(PORTABLE_DATA_DIR_NAME + STAGING_SUFFIX))
+    writeDurably(building.resolve(PORTABLE_MARKER_NAME), ByteArray(0))
+    syncDirectory(building)
+    moveForInstall(building, staging.resolve(PORTABLE_DATA_DIR_NAME))
     syncDirectory(staging)
 }
 
@@ -92,7 +96,7 @@ internal fun discardStaging(
     staging: Path,
     protectData: Boolean = true,
 ) {
-    if (protectData && holdsData(staging)) {
+    if (protectData && mayHoldData(staging)) {
         errorln { "[portable-install] keeping $STAGING_SUFFIX folder: it holds the data of a portable copy" }
         return
     }
@@ -110,18 +114,36 @@ internal fun clearStaging(staging: Path) {
 
 /**
  * Removes the previous program a finished update could not delete, before a new update. One that
- * still holds a data folder is an interrupted update (see [holdsData]) and stops this one instead.
+ * may still hold a data folder (see [mayHoldData]) stops this update instead.
  */
 internal fun clearPrevious(previous: Path) {
-    if (holdsData(previous) || !deleteTree(previous) || Files.exists(previous, NOFOLLOW_LINKS)) {
+    if (mayHoldData(previous) || !deleteTree(previous) || Files.exists(previous, NOFOLLOW_LINKS)) {
         throw PortableInstallException(FailureReason.UpdateLeftover)
     }
 }
 
-/** A real folder (not a link to one) holding a real data folder: a copy's data lives there. */
-internal fun holdsData(folder: Path): Boolean =
-    Files.isDirectory(folder, NOFOLLOW_LINKS) && Files.isDirectory(folder.resolve(PORTABLE_DATA_DIR_NAME), NOFOLLOW_LINKS)
+/** Removes the previous program once the copy's data is out of it; kept if it may still hold data. */
+internal fun removePrevious(previous: Path) {
+    if (mayHoldData(previous) || !deleteTree(previous)) warnln { "[portable-install] the previous program could not be fully removed" }
+}
 
-/** A portable copy: [holdsData], with the marker that makes it start in portable mode. */
-internal fun isPortableCopy(folder: Path): Boolean =
-    holdsData(folder) && Files.isRegularFile(folder.resolve(PORTABLE_DATA_DIR_NAME).resolve(PORTABLE_MARKER_NAME), NOFOLLOW_LINKS)
+/**
+ * Whether [folder] may hold a copy's data, for the checks that guard a deletion: anything with the
+ * data folder's name counts, and so does a drive error that leaves the answer unknown.
+ */
+internal fun mayHoldData(folder: Path): Boolean = !Files.notExists(folder.resolve(PORTABLE_DATA_DIR_NAME), NOFOLLOW_LINKS)
+
+/** A portable copy: real folders (see [isRealDirectory]) with the marker that makes it start in portable mode. */
+internal fun isPortableCopy(folder: Path): Boolean {
+    val dataDir = folder.resolve(PORTABLE_DATA_DIR_NAME)
+    return isRealDirectory(folder) && isRealDirectory(dataDir) && Files.isRegularFile(dataDir.resolve(PORTABLE_MARKER_NAME), NOFOLLOW_LINKS)
+}
+
+/** A folder that is not a link, nor a Windows junction, which reads as a folder too. */
+private fun isRealDirectory(path: Path): Boolean =
+    try {
+        val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+        attributes.isDirectory && !attributes.isSymbolicLink && !attributes.isOther
+    } catch (_: IOException) {
+        false
+    }

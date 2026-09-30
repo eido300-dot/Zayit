@@ -417,6 +417,7 @@
     <string name="install_location_stale">נמצאה בתיקייה העתקה קודמת שלא הושלמה. אפשר למחוק אותה ולהמשיך.</string>
     <string name="install_location_stale_button">מחיקה והמשך</string>
     <string name="install_location_interrupted">עדכון קודם של העותק שבכונן נקטע באמצע, והנתונים שלכם (הספרייה, ההערות וההגדרות) נמצאים עכשיו בתיקייה %1$s. אל תמחקו אותה. אפשר להחזיר את העותק למקומו, בלי לאבד דבר.</string>
+    <string name="install_location_leftover_beside_copy">בתיקייה יש גם תיקייה בשם Zayit וגם את %1$s, שנשארה מעדכון שנקטע ובה נתונים של עותק נייד (ספרייה, הערות והגדרות). כדי שלא יאבדו נתונים, זית לא ישנה אף אחת מהן. העבירו אחת מהן ידנית למקום אחר, ובחרו שוב את התיקייה.</string>
     <string name="install_location_recover_button">החזרת העותק למקומו</string>
     <string name="install_location_recheck_button">בדיקה חוזרת</string>
     <string name="install_location_back_button">חזרה</string>
@@ -439,7 +440,7 @@
     <string name="install_location_failed_copy">ההעתקה נכשלה, ושום דבר לא השתנה בכונן. בדקו שהכונן מחובר ושיש בו מקום, ונסו שוב.</string>
     <string name="install_location_failed_in_use">העותק שבכונן פתוח עכשיו, במחשב הזה או במחשב אחר. סגרו אותו ונסו שוב.</string>
     <string name="install_location_failed_leftover">בכונן נשארה תיקייה מהעתקה או מעדכון קודמים (Zayit.partial או Zayit.old), וייתכן שהנתונים שלכם בתוכה. אל תמחקו אותה. לחצו על ״בדיקה חוזרת״ כדי להחזיר את העותק למקומו, ואם זה לא עוזר, העבירו את התיקייה ידנית למקום אחר.</string>
-    <string name="install_location_failed_links">הכונן הזה לא יכול להכיל את הקישורים הסימבוליים שבתוכנה (כמו כונן exFAT או FAT). ההעתקה בוטלה ושום דבר לא נשאר בכונן. בחרו כונן עם מערכת קבצים אחרת, כמו APFS במק או ext4 בלינוקס.</string>
+    <string name="install_location_failed_links">לא ניתן היה ליצור בכונן את הקישורים הסימבוליים שבתוכנה. בדרך כלל זה קורה בכונן שלא תומך בהם, כמו exFAT או FAT. ההעתקה בוטלה ושום דבר לא נשאר בכונן. בדקו שהכונן מחובר, או בחרו כונן עם מערכת קבצים אחרת, כמו APFS במק או ext4 בלינוקס.</string>
 
     <!--Downloading-->
     <string name="onboarding_downloading_message">אנא המתן בזמן שאנו מורידים את מסד הנתונים</string>

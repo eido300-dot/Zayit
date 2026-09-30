@@ -4,7 +4,6 @@ import io.github.kdroidfilter.seforimapp.features.onboarding.diskspace.Available
 import io.github.kdroidfilter.seforimapp.framework.platform.currentExecutablePath
 import io.github.kdroidfilter.seforimapp.framework.portable.DriveLock
 import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_DATA_DIR_NAME
-import io.github.kdroidfilter.seforimapp.framework.portable.deleteTree
 import io.github.kdroidfilter.seforimapp.framework.portable.isReallyInside
 import io.github.kdroidfilter.seforimapp.framework.portable.syncDirectory
 import io.github.kdroidfilter.seforimapp.framework.portable.treeSize
@@ -77,6 +76,8 @@ class PortableInstallUseCase(
             withContext(ioDispatcher) {
                 val plan = requirePlan(targetParent)
                 if (Files.exists(plan.destination, NOFOLLOW_LINKS)) throw PortableInstallException(FailureReason.AlreadyExists)
+                // A new Zayit would stand in the way of putting back the copy whose data is aside.
+                if (interruptedUpdateOf(plan) != null) throw PortableInstallException(FailureReason.UpdateLeftover)
                 clearStaging(plan.staging)
                 var committed = false
                 try {
@@ -113,7 +114,7 @@ class PortableInstallUseCase(
             withContext(ioDispatcher) {
                 val plan = requirePlan(targetParent)
                 if (!isPortableCopy(plan.destination)) throw PortableInstallException(FailureReason.Unavailable)
-                requireNotRunning(plan)
+                requireNotRunning(plan.destination)
                 clearPrevious(plan.previous)
                 clearStaging(plan.staging)
                 var committed = false
@@ -121,14 +122,14 @@ class PortableInstallUseCase(
                     asInstallFailure {
                         stageProgram(plan, onProgress)
                         // Again: the copy may have been started from the drive while this one was staged.
-                        requireNotRunning(plan)
+                        requireNotRunning(plan.destination)
                         swapProgram(plan, move)
                     }
                     committed = true
                 } finally {
                     if (!committed) withContext(NonCancellable) { discardStaging(plan.staging) }
                 }
-                if (!deleteTree(plan.previous)) warnln { "[portable-install] the previous program could not be fully removed" }
+                removePrevious(plan.previous)
                 plan.destination.toString()
             }
         }
@@ -149,12 +150,12 @@ class PortableInstallUseCase(
                 if (leftover == null || Files.exists(plan.destination, NOFOLLOW_LINKS)) {
                     throw PortableInstallException(FailureReason.UpdateLeftover)
                 }
+                // The copy left aside can be started from there, and must not be moved while it runs.
+                requireNotRunning(leftover)
                 asInstallFailure { move(leftover, plan.destination) }
                 syncDirectory(targetParent)
                 discardStaging(plan.staging)
-                if (!holdsData(plan.previous) && !deleteTree(plan.previous)) {
-                    warnln { "[portable-install] the previous program could not be fully removed" }
-                }
+                removePrevious(plan.previous)
                 plan.destination.toString()
             }
         }
@@ -163,11 +164,17 @@ class PortableInstallUseCase(
         val plan = executable()?.let { planInstall(it, targetParent) }
         if (plan == null || !Files.isDirectory(targetParent)) return TargetCheck.Unavailable
         val store = Files.getFileStore(targetParent)
-        val found = locationProblem(plan, targetParent, store.type()) ?: existingCopy(plan)
-        if (found != null && found !is TargetCheck.ExistingPortable) return found
-        // An update needs room and write access too, for the new program next to the old one.
-        val room = writeAndSpace(plan, targetParent, store, isUpdate = found != null)
-        return if (found != null && room is TargetCheck.Ok) found else room
+        return when (val found = locationProblem(plan, targetParent, store.type()) ?: existingCopy(plan)) {
+            null -> writeAndSpace(plan, targetParent, store, isUpdate = false)
+            // An update needs room and write access too, for the new program next to the old one.
+            is TargetCheck.ExistingPortable -> {
+                val room = writeAndSpace(plan, targetParent, store, isUpdate = true)
+                if (room is TargetCheck.Ok) found else room
+            }
+            // Offered only where the renames or the removal it takes can work.
+            is TargetCheck.InterruptedUpdate, is TargetCheck.StalePartial -> if (canWrite(targetParent)) found else TargetCheck.NotWritable
+            else -> found
+        }
     }
 
     private fun locationProblem(
@@ -185,17 +192,19 @@ class PortableInstallUseCase(
 
     private fun existingCopy(plan: InstallPlan): TargetCheck? {
         val interrupted = interruptedUpdateOf(plan)
+        val hasDestination = Files.exists(plan.destination, NOFOLLOW_LINKS)
         return when {
+            interrupted != null && hasDestination -> TargetCheck.LeftoverBesideCopy(interrupted.toString())
             interrupted != null -> TargetCheck.InterruptedUpdate(interrupted.toString())
             isPortableCopy(plan.destination) -> TargetCheck.ExistingPortable(plan.destination.toString())
-            Files.exists(plan.destination, NOFOLLOW_LINKS) -> TargetCheck.AlreadyExists(plan.destination.toString())
+            hasDestination -> TargetCheck.AlreadyExists(plan.destination.toString())
             Files.exists(plan.staging, NOFOLLOW_LINKS) -> TargetCheck.StalePartial(plan.staging.toString())
             else -> null
         }
     }
 
-    /** The folder an interrupted update left the copy's data in, if any (see [holdsData]). */
-    private fun interruptedUpdateOf(plan: InstallPlan): Path? = listOf(plan.staging, plan.previous).firstOrNull(::holdsData)
+    /** The folder an interrupted update left the copy's data in, if any: a whole portable copy. */
+    private fun interruptedUpdateOf(plan: InstallPlan): Path? = listOf(plan.staging, plan.previous).firstOrNull(::isPortableCopy)
 
     /** Room for the program, plus the library for a new copy; an update keeps the library it has. */
     private fun writeAndSpace(
@@ -214,9 +223,9 @@ class PortableInstallUseCase(
     private fun requirePlan(targetParent: Path): InstallPlan =
         executable()?.let { planInstall(it, targetParent) } ?: throw PortableInstallException(FailureReason.Unavailable)
 
-    /** Refuses to swap the program of a copy that is running, on this computer or another one. */
-    private fun requireNotRunning(plan: InstallPlan) {
-        when (val lock = DriveLock.tryAcquire(plan.destination.resolve(PORTABLE_DATA_DIR_NAME))) {
+    /** Refuses to move the portable copy in [copy] while it runs, on this computer or another one. */
+    private fun requireNotRunning(copy: Path) {
+        when (val lock = DriveLock.tryAcquire(copy.resolve(PORTABLE_DATA_DIR_NAME))) {
             // Released at once: Windows cannot rename a folder while a file in it is open.
             is DriveLock.Result.Acquired -> lock.lock.close()
             DriveLock.Result.InUse -> throw PortableInstallException(FailureReason.DriveInUse)

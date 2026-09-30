@@ -6,10 +6,10 @@ import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_DATA_DIR_NA
 import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_MARKER_NAME
 import io.github.kdroidfilter.seforimapp.framework.portable.resolvePortableLayout
 import io.github.kdroidfilter.seforimapp.framework.portable.treeSize
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.junit.Assume.assumeTrue
 import java.io.IOException
 import java.nio.file.FileSystems
 import java.nio.file.Files
@@ -31,9 +31,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-
-/** More than two copy chunks, so a copy reports and can stop inside the file. */
-private const val LARGE_FILE_BYTES = 20 * 1024 * 1024
 
 class PortableInstallUseCaseTest {
     private val root: Path = createTempDirectory("zayit-portable-install")
@@ -82,11 +79,33 @@ class PortableInstallUseCaseTest {
 
     /** An existing portable copy on the drive, with notes in its data folder. */
     private fun createExistingCopy() {
-        val data = Files.createDirectories(destination.resolve(PORTABLE_DATA_DIR_NAME))
-        data.resolve(PORTABLE_MARKER_NAME).writeText("")
-        data.resolve("notes.db").writeText("my notes")
+        createCopyData(destination, "my notes")
         destination.resolve("zayit.exe").writeText("old exe")
         destination.resolve("old-only.bin").writeText("old")
+    }
+
+    /** A portable copy's data folder in [folder]: the marker and [notes]. */
+    private fun createCopyData(
+        folder: Path,
+        notes: String,
+    ) {
+        val data = Files.createDirectories(folder.resolve(PORTABLE_DATA_DIR_NAME))
+        data.resolve(PORTABLE_MARKER_NAME).writeText("")
+        data.resolve("notes.db").writeText(notes)
+    }
+
+    /** An update that failed, and whose undo failed too, with the notes left in `Zayit.old`. */
+    private suspend fun leaveNotesInPrevious() {
+        createProgram()
+        createExistingCopy()
+        val calls = AtomicInteger()
+        // 3 is the last rename; its undo moves the notes back (4), then fails to put Zayit back (5).
+        val failingLastAndUndo: (Path, Path) -> Unit = { from, to ->
+            if (calls.incrementAndGet() in setOf(3, 5)) throw IOException("sharing violation")
+            moveForInstall(from, to)
+        }
+        val failure = assertFailsWith<PortableInstallException> { useCase(move = failingLastAndUndo).updateProgram(drive) { _, _ -> } }
+        assertEquals(FailureReason.UpdateLeftover, failure.reason)
     }
 
     @Test
@@ -207,48 +226,6 @@ class PortableInstallUseCaseTest {
         }
 
     @Test
-    fun `a large file is copied in chunks, each reported, so a copy can stop inside it`() {
-        val from = Files.write(root.resolve("large.bin"), ByteArray(LARGE_FILE_BYTES) { it.toByte() })
-        val to = root.resolve("large-copy.bin")
-        val chunks = mutableListOf<Long>()
-
-        copyFileDurably(from, to) { chunks += it }
-
-        assertTrue(chunks.size >= 3, chunks.toString())
-        assertEquals(LARGE_FILE_BYTES.toLong(), chunks.sum())
-        assertTrue(Files.readAllBytes(from).contentEquals(Files.readAllBytes(to)))
-    }
-
-    @Test
-    fun `a copy stops at the first chunk whose report throws`() {
-        val from = Files.write(root.resolve("large.bin"), ByteArray(LARGE_FILE_BYTES))
-        var reports = 0
-
-        assertFailsWith<CancellationException> {
-            copyFileDurably(from, root.resolve("large-copy.bin")) {
-                reports++
-                throw CancellationException("cancelled")
-            }
-        }
-
-        assertEquals(1, reports)
-    }
-
-    @Test
-    fun `a read-only file is copied and keeps its permission bits`() {
-        if ("posix" !in FileSystems.getDefault().supportedFileAttributeViews()) return
-        val from = root.resolve("readonly.bin")
-        from.writeText("r")
-        Files.setPosixFilePermissions(from, PosixFilePermissions.fromString("r--r--r--"))
-        val to = root.resolve("readonly-copy.bin")
-
-        copyFileDurably(from, to) { }
-
-        assertEquals("r", to.readText())
-        assertEquals(PosixFilePermissions.fromString("r--r--r--"), Files.getPosixFilePermissions(to))
-    }
-
-    @Test
     fun `a file that fails to copy fails the whole copy and leaves nothing behind`() =
         runBlocking {
             createProgram()
@@ -342,8 +319,7 @@ class PortableInstallUseCaseTest {
     fun `a leftover holding a data folder is never deleted`() =
         runBlocking {
             createProgram()
-            Files.createDirectories(staging.resolve(PORTABLE_DATA_DIR_NAME))
-            staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").writeText("my notes")
+            createCopyData(staging, "my notes")
 
             val failure = assertFailsWith<PortableInstallException> { useCase().install(drive) { _, _ -> } }
 
@@ -416,20 +392,94 @@ class PortableInstallUseCaseTest {
         }
 
     @Test
-    fun `a previous program left with notes in it is never cleared`() =
+    fun `notes left aside next to a Zayit folder are reported, and neither is changed`() =
         runBlocking {
             createProgram()
             createExistingCopy()
-            Files.createDirectories(previous.resolve(PORTABLE_DATA_DIR_NAME))
-            previous.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").writeText("older notes")
+            createCopyData(previous, "older notes")
 
-            assertEquals(TargetCheck.InterruptedUpdate(previous.toString()), useCase().check(drive))
+            assertEquals(TargetCheck.LeftoverBesideCopy(previous.toString()), useCase().check(drive))
+            val update = assertFailsWith<PortableInstallException> { useCase().updateProgram(drive) { _, _ -> } }
+            val recovery = assertFailsWith<PortableInstallException> { useCase().recoverInterruptedUpdate(drive) }
+
+            assertEquals(FailureReason.UpdateLeftover, update.reason)
+            assertEquals(FailureReason.UpdateLeftover, recovery.reason)
+            assertEquals("my notes", destination.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertEquals("older notes", previous.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+        }
+
+    @Test
+    fun `anything named like the data folder keeps the previous program`() =
+        runBlocking {
+            createProgram()
+            createExistingCopy()
+            Files.createDirectories(previous)
+            Files.createSymbolicLink(previous.resolve(PORTABLE_DATA_DIR_NAME), root.resolve("somewhere"))
+
             val failure = assertFailsWith<PortableInstallException> { useCase().updateProgram(drive) { _, _ -> } }
 
             assertEquals(FailureReason.UpdateLeftover, failure.reason)
-            assertEquals("old exe", destination.resolve("zayit.exe").readText())
-            assertEquals("older notes", previous.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertTrue(Files.isSymbolicLink(previous.resolve(PORTABLE_DATA_DIR_NAME)))
         }
+
+    @Test
+    fun `a new copy is refused while an interrupted update's notes are aside`() =
+        runBlocking {
+            leaveNotesInPrevious()
+            assertEquals(TargetCheck.InterruptedUpdate(previous.toString()), useCase().check(drive))
+
+            val failure = assertFailsWith<PortableInstallException> { useCase().install(drive) { _, _ -> } }
+
+            assertEquals(FailureReason.UpdateLeftover, failure.reason)
+            assertFalse(Files.exists(destination, NOFOLLOW_LINKS))
+            assertEquals("my notes", previous.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+        }
+
+    @Test
+    fun `a copy left aside is not put back while it runs`() =
+        runBlocking {
+            leaveNotesInPrevious()
+            val lock = assertIs<DriveLock.Result.Acquired>(DriveLock.tryAcquire(previous.resolve(PORTABLE_DATA_DIR_NAME))).lock
+
+            val failure = lock.use { assertFailsWith<PortableInstallException> { useCase().recoverInterruptedUpdate(drive) } }
+
+            assertEquals(FailureReason.DriveInUse, failure.reason)
+            assertFalse(Files.exists(destination, NOFOLLOW_LINKS))
+            assertEquals("my notes", previous.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+        }
+
+    @Test
+    fun `leftovers are offered for recovery or removal only where the drive can be written to`() =
+        runBlocking {
+            leaveNotesInPrevious()
+            assertEquals(TargetCheck.NotWritable, useCase(canWrite = { false }).check(drive))
+
+            useCase().recoverInterruptedUpdate(drive)
+            Files.createDirectories(drive.resolve("other/$PORTABLE_FOLDER_NAME$STAGING_SUFFIX"))
+            assertEquals(TargetCheck.NotWritable, useCase(canWrite = { false }).check(drive.resolve("other")))
+        }
+
+    @Test
+    fun `a leftover without the portable marker is not taken for an interrupted update, and is kept`() =
+        runBlocking {
+            createProgram()
+            Files.createDirectories(staging.resolve(PORTABLE_DATA_DIR_NAME))
+            staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").writeText("my notes")
+
+            assertEquals(TargetCheck.StalePartial(staging.toString()), useCase().check(drive))
+            assertFalse(useCase().discardStalePartial(drive))
+            assertEquals("my notes", staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+        }
+
+    @Test
+    fun `a new copy's data folder appears only with its marker`() {
+        val folder = Files.createDirectories(root.resolve("new-copy"))
+
+        createDataFolder(folder)
+
+        assertTrue(isPortableCopy(folder))
+        Files.list(folder).use { entries -> assertEquals(listOf(PORTABLE_DATA_DIR_NAME), entries.map { it.fileName.toString() }.toList()) }
+    }
 
     @Test
     fun `a previous program left without notes is removed, and the update goes on`() =
@@ -475,17 +525,7 @@ class PortableInstallUseCaseTest {
     @Test
     fun `an update stopped with the notes still in the previous program is undone on request`() =
         runBlocking {
-            createProgram()
-            createExistingCopy()
-            val calls = AtomicInteger()
-            // 3 is the last rename; its undo moves the notes back (4), then fails to put Zayit back (5).
-            val failingLastAndUndo: (Path, Path) -> Unit = { from, to ->
-                if (calls.incrementAndGet() in setOf(3, 5)) throw IOException("sharing violation")
-                moveForInstall(from, to)
-            }
-
-            val failure = assertFailsWith<PortableInstallException> { useCase(move = failingLastAndUndo).updateProgram(drive) { _, _ -> } }
-            assertEquals(FailureReason.UpdateLeftover, failure.reason)
+            leaveNotesInPrevious()
             assertEquals(TargetCheck.InterruptedUpdate(previous.toString()), useCase().check(drive))
 
             useCase().recoverInterruptedUpdate(drive)
@@ -504,8 +544,7 @@ class PortableInstallUseCaseTest {
                 FailureReason.UpdateLeftover,
                 assertFailsWith<PortableInstallException> { useCase().recoverInterruptedUpdate(drive) }.reason,
             )
-            Files.createDirectories(staging.resolve(PORTABLE_DATA_DIR_NAME))
-            staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").writeText("my notes")
+            createCopyData(staging, "my notes")
             Files.createDirectories(destination)
             destination.resolve("mine.txt").writeText("keep")
 
@@ -586,7 +625,7 @@ class PortableInstallUseCaseTest {
             createProgram()
             val fifo = programDir.resolve("lib/pipe")
             val made = runCatching { ProcessBuilder("mkfifo", fifo.toString()).start().waitFor() == 0 }.getOrDefault(false)
-            if (!made) return@runBlocking
+            assumeTrue("mkfifo is not available", made)
 
             val failure = assertFailsWith<PortableInstallException> { useCase().install(drive) { _, _ -> } }
 

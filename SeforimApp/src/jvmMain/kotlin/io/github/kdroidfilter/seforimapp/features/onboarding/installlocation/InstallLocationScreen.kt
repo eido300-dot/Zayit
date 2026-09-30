@@ -88,6 +88,7 @@ import seforimapp.seforimapp.generated.resources.install_location_failed_not_exe
 import seforimapp.seforimapp.generated.resources.install_location_finishing
 import seforimapp.seforimapp.generated.resources.install_location_folder
 import seforimapp.seforimapp.generated.resources.install_location_interrupted
+import seforimapp.seforimapp.generated.resources.install_location_leftover_beside_copy
 import seforimapp.seforimapp.generated.resources.install_location_local_button
 import seforimapp.seforimapp.generated.resources.install_location_local_desc
 import seforimapp.seforimapp.generated.resources.install_location_local_title
@@ -323,7 +324,7 @@ private fun CheckedView(state: InstallLocationState.Checked) {
         when (state.check) {
             is TargetCheck.Ok -> InlineSuccessBanner(text = message, modifier = Modifier.fillMaxWidth())
             is TargetCheck.ExistingPortable -> InlineInformationBanner(text = message, modifier = Modifier.fillMaxWidth())
-            is TargetCheck.StalePartial, is TargetCheck.InterruptedUpdate ->
+            is TargetCheck.StalePartial, is TargetCheck.InterruptedUpdate, is TargetCheck.LeftoverBesideCopy ->
                 InlineWarningBanner(text = message, modifier = Modifier.fillMaxWidth())
             else -> InlineErrorBanner(text = message, modifier = Modifier.fillMaxWidth())
         }
@@ -345,6 +346,7 @@ private fun checkMessage(check: TargetCheck): String =
         is TargetCheck.AlreadyExists -> stringResource(Res.string.install_location_error_already_exists)
         is TargetCheck.StalePartial -> stringResource(Res.string.install_location_stale)
         is TargetCheck.InterruptedUpdate -> stringResource(Res.string.install_location_interrupted, check.path)
+        is TargetCheck.LeftoverBesideCopy -> stringResource(Res.string.install_location_leftover_beside_copy, check.path)
         TargetCheck.Unavailable -> stringResource(Res.string.install_location_error_unavailable)
     }
 

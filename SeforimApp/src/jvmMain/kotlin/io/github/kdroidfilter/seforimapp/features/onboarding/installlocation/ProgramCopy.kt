@@ -2,10 +2,10 @@ package io.github.kdroidfilter.seforimapp.features.onboarding.installlocation
 
 import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_DATA_DIR_NAME
 import io.github.kdroidfilter.seforimapp.framework.portable.forceToDisk
+import io.github.kdroidfilter.seforimapp.logger.warnln
 import kotlinx.coroutines.ensureActive
-import java.io.FileNotFoundException
+import java.io.FileInputStream
 import java.io.IOException
-import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
 import java.nio.file.AccessDeniedException
 import java.nio.file.FileSystemException
@@ -21,6 +21,7 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileAttribute
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermissions
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 
 /** How much of a file is copied between two checks for cancellation and two progress reports. */
@@ -129,8 +130,9 @@ private fun copyLink(
     from: Path,
     to: Path,
 ) {
+    val target = Files.readSymbolicLink(from)
     try {
-        Files.createSymbolicLink(to, Files.readSymbolicLink(from))
+        Files.createSymbolicLink(to, target)
     } catch (e: UnsupportedOperationException) {
         throw PortableInstallException(FailureReason.LinksUnsupported, e)
     } catch (e: FileSystemException) {
@@ -140,62 +142,92 @@ private fun copyLink(
 }
 
 /**
- * Copies one file in chunks, reporting each to [onCopied] (which may throw to stop the copy), then
- * flushes it to the device. File attributes are not copied: the new file gets the source's
- * permission bits (so the program stays executable) but no timestamps, owner or macOS quarantine
- * flag, as with `Files.copy` without `COPY_ATTRIBUTES`.
+ * Copies one file in chunks, each flushed to the device before it is reported to [onCopied] (which
+ * may throw to stop the copy). Without that, a copy to a slow drive would only fill the cache: the
+ * progress would run ahead of the drive and a cancel would wait for one long flush at the end.
+ *
+ * File attributes are not copied: the new file gets the source's permission bits (so the program
+ * stays executable) but no timestamps, owner or macOS quarantine flag, as with `Files.copy` without
+ * `COPY_ATTRIBUTES`.
  */
 @Throws(IOException::class)
 internal fun copyFileDurably(
     from: Path,
     to: Path,
     onCopied: (bytes: Long) -> Unit,
+) = copyFileDurably(from, to, FileChannel::force, onCopied)
+
+/** [copyFileDurably] with the flush of [DeviceFlush] replaced, for tests. */
+@Throws(IOException::class)
+internal fun copyFileDurably(
+    from: Path,
+    to: Path,
+    force: (FileChannel, metadata: Boolean) -> Unit,
+    onCopied: (bytes: Long) -> Unit,
 ) {
     FileChannel.open(from, READ, NOFOLLOW_LINKS).use { input ->
         FileChannel.open(to, setOf(CREATE_NEW, WRITE), *permissionsOf(from)).use { output ->
+            val flush = DeviceFlush(output, to, force)
             val size = input.size()
             var position = 0L
             while (position < size) {
                 val copied = input.transferTo(position, minOf(COPY_CHUNK_BYTES, size - position), output)
                 if (copied <= 0) throw IOException("$from got shorter while it was copied")
                 position += copied
+                flush.flush(metadata = false)
                 onCopied(copied)
             }
-            if (tryForce(output)) return
+            flush.flush(metadata = true)
         }
     }
-    flushToDevice(to)
 }
 
-/** Flushes through the channel that wrote the file; false when this file system refuses it. */
-private fun tryForce(output: FileChannel): Boolean =
-    try {
-        output.force(true)
-        true
-    } catch (_: IOException) {
-        false
+/**
+ * Flushes what [output] wrote to [file] through that same channel. A failure is the drive's write
+ * error, which Linux reports only once per file, so it is never retried through another handle.
+ *
+ * The one exception is macOS, where `force` asks for a full flush (`F_FULLFSYNC`) that some file
+ * systems refuse, as [forceToDisk] allows. Refused on the file's first flush, it is replaced by a
+ * plain `fsync` for the rest of the file; after a flush went through, a failure is an error there
+ * too.
+ */
+internal class DeviceFlush(
+    private val output: FileChannel,
+    private val file: Path,
+    private val force: (FileChannel, metadata: Boolean) -> Unit = FileChannel::force,
+    private val fullFlushMayBeRefused: Boolean = IS_MAC_OS,
+) {
+    private var flushed = false
+    private var fullFlushRefused = false
+
+    @Throws(IOException::class)
+    fun flush(metadata: Boolean) {
+        if (!fullFlushRefused) {
+            try {
+                force(output, metadata)
+                flushed = true
+                return
+            } catch (e: IOException) {
+                if (flushed || !fullFlushMayBeRefused) throw e
+                fullFlushRefused = true
+                if (fullFlushRefusalLogged.compareAndSet(false, true)) {
+                    warnln(e) { "[portable-install] full flush refused by this drive, falling back to fsync" }
+                }
+            }
+        }
+        // A read handle is enough for fsync, so a read-only program file is flushed too.
+        FileInputStream(file.toFile()).use { it.fd.sync() }
     }
+}
+
+private val IS_MAC_OS = System.getProperty("os.name").orEmpty().startsWith("Mac", ignoreCase = true)
+
+private val fullFlushRefusalLogged = AtomicBoolean(false)
 
 /** The permission bits of [file] as a creation attribute, where the file system has them (not Windows). */
 private fun permissionsOf(file: Path): Array<FileAttribute<*>> {
     val view = Files.getFileAttributeView(file, PosixFileAttributeView::class.java, NOFOLLOW_LINKS) ?: return emptyArray()
     return arrayOf(PosixFilePermissions.asFileAttribute(view.readAttributes().permissions()))
-}
-
-/** The fallback of [tryForce], as for [forceToDisk]: a plain `fsync` through a new handle. */
-@Throws(IOException::class)
-private fun flushToDevice(to: Path) {
-    try {
-        RandomAccessFile(to.toFile(), "rw").use { forceToDisk(it) }
-    } catch (_: FileNotFoundException) {
-        // A read-only file cannot be opened for writing: flush it through a read handle, which
-        // Linux and macOS accept. Windows refuses that too, and its own write-back still applies.
-        try {
-            FileChannel.open(to, READ).use { it.force(true) }
-        } catch (_: IOException) {
-            // Best effort, as explained above.
-        }
-    }
 }
 
 /** Whether a file can really be created in [dir]; permission bits alone say little on a drive. */

@@ -91,6 +91,14 @@ sealed interface TargetCheck {
         val path: String,
     ) : TargetCheck
 
+    /**
+     * Like [InterruptedUpdate], but a `Zayit` folder stands in the way. Which of the two holds the
+     * user's data is unclear, so neither is changed: the user moves one of them by hand.
+     */
+    data class LeftoverBesideCopy(
+        val path: String,
+    ) : TargetCheck
+
     /** The program's own location is unknown (a development run) or the folder cannot be read. */
     data object Unavailable : TargetCheck
 }

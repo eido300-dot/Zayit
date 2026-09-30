@@ -51,6 +51,7 @@ class InstallLocationStateTest {
             TargetCheck.InsideProgramDir,
             TargetCheck.PathTooLong,
             TargetCheck.AlreadyExists("/media/usb/Zayit"),
+            TargetCheck.LeftoverBesideCopy("/media/usb/Zayit.old"),
             TargetCheck.Unavailable,
         ).forEach { check -> assertNull(primaryActionOf(check), check.toString()) }
     }
