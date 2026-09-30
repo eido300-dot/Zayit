@@ -44,8 +44,6 @@ data class LibraryHealth(
     val isHealthy: Boolean get() = problems.isEmpty()
 
     val needsReinstall: Boolean get() = problems.any { it.severity == Severity.Reinstall }
-
-    val degraded: List<LibraryProblem> get() = problems.filter { it.severity == Severity.Degraded }
 }
 
 /** The fields of the 100-byte SQLite header the check needs. [pageCount] is null when the header does not vouch for it. */
@@ -90,15 +88,32 @@ internal fun checkLibraryHealth(
     files: LibraryFiles,
     probe: LibraryProbe = RealLibraryProbe,
     dictionaryOverridden: Boolean = isDictionaryOverridden(),
+): LibraryHealth = LibraryHealth(checkRequiredParts(files, probe).problems + checkOptionalParts(files, probe, dictionaryOverridden))
+
+/**
+ * The part of [checkLibraryHealth] the app cannot open without: the database and the catalog. This
+ * is the check before the first window; the indexes and the dictionary only degrade the app, so they
+ * are left to [checkOptionalParts] once the window is up, and the window does not wait for them.
+ */
+internal fun checkRequiredParts(
+    files: LibraryFiles,
+    probe: LibraryProbe = RealLibraryProbe,
 ): LibraryHealth {
-    val problems = mutableListOf<LibraryProblem>()
-    databaseProblem(files.database, probe)?.let(problems::add)
-    if (probe.size(files.catalog) == null) problems += LibraryProblem.CatalogMissing
-    if (!probe.luceneIndexComplete(files.textIndex)) problems += LibraryProblem.TextIndexMissing
-    if (!probe.luceneIndexComplete(files.lookupIndex)) problems += LibraryProblem.LookupIndexMissing
-    if (!dictionaryOverridden && !probe.dictionaryValid(files.dictionary)) problems += LibraryProblem.DictionaryMissing
-    return LibraryHealth(problems)
+    val catalogMissing = LibraryProblem.CatalogMissing.takeIf { probe.size(files.catalog) == null }
+    return LibraryHealth(listOfNotNull(databaseProblem(files.database, probe), catalogMissing))
 }
+
+/** The part of [checkLibraryHealth] whose problems only degrade the app: the search indexes and the dictionary. */
+internal fun checkOptionalParts(
+    files: LibraryFiles,
+    probe: LibraryProbe = RealLibraryProbe,
+    dictionaryOverridden: Boolean = isDictionaryOverridden(),
+): List<LibraryProblem> =
+    buildList {
+        if (!probe.luceneIndexComplete(files.textIndex)) add(LibraryProblem.TextIndexMissing)
+        if (!probe.luceneIndexComplete(files.lookupIndex)) add(LibraryProblem.LookupIndexMissing)
+        if (!dictionaryOverridden && !probe.dictionaryValid(files.dictionary)) add(LibraryProblem.DictionaryMissing)
+    }
 
 private fun databaseProblem(
     database: Path,

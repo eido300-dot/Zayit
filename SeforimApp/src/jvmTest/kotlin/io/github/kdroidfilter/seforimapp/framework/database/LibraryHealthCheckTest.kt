@@ -162,7 +162,20 @@ class LibraryHealthCheckTest {
 
         assertEquals(listOf(LibraryProblem.CatalogMissing, LibraryProblem.DictionaryMissing), health.problems)
         assertTrue(health.needsReinstall)
-        assertEquals(listOf(LibraryProblem.DictionaryMissing), health.degraded)
+        assertEquals(listOf(LibraryProblem.DictionaryMissing), checkOptionalParts(files, dictionaryOverridden = false))
+    }
+
+    @Test
+    fun `the check before the first window leaves the indexes and the dictionary to the one after it`() {
+        createCompleteLibrary()
+        files.textIndex.toFile().deleteRecursively()
+        Files.delete(files.dictionary)
+
+        assertTrue(checkRequiredParts(files).isHealthy)
+        assertEquals(
+            listOf(LibraryProblem.TextIndexMissing, LibraryProblem.DictionaryMissing),
+            checkOptionalParts(files, dictionaryOverridden = false),
+        )
     }
 
     @Test
@@ -233,6 +246,32 @@ class LibraryHealthCheckTest {
         override fun luceneIndexComplete(directory: Path) = true
 
         override fun dictionaryValid(dictionary: Path) = true
+    }
+
+    /** A healthy library that records which reads were made. */
+    private class RecordingProbe : LibraryProbe {
+        val reads = mutableSetOf<String>()
+
+        override fun size(path: Path): Long? = 1_000_000L.also { reads += "size" }
+
+        override fun header(database: Path) = SqliteHeader(pageSize = 4096, pageCount = null).also { reads += "header" }
+
+        override fun bookTable(database: Path) = BookTableState.HasBooks.also { reads += "bookTable" }
+
+        override fun luceneIndexComplete(directory: Path) = true.also { reads += "luceneIndexComplete" }
+
+        override fun dictionaryValid(dictionary: Path) = true.also { reads += "dictionaryValid" }
+    }
+
+    @Test
+    fun `each half of the check reads only its own parts`() {
+        val required = RecordingProbe()
+        assertTrue(checkRequiredParts(files, required).isHealthy)
+        assertEquals(setOf("size", "header", "bookTable"), required.reads)
+
+        val optional = RecordingProbe()
+        assertEquals(emptyList(), checkOptionalParts(files, optional, dictionaryOverridden = false))
+        assertEquals(setOf("luceneIndexComplete", "dictionaryValid"), optional.reads)
     }
 
     @Test

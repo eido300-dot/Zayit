@@ -7,6 +7,8 @@ import io.github.kdroidfilter.seforimapp.framework.database.DatabaseVersionManag
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryVerifier
 import io.github.kdroidfilter.seforimapp.framework.database.VerificationInconclusiveException
+import io.github.kdroidfilter.seforimapp.framework.database.canForgetReinstall
+import io.github.kdroidfilter.seforimapp.framework.database.checkOptionalParts
 import io.github.kdroidfilter.seforimapp.framework.database.encodeProblems
 import io.github.kdroidfilter.seforimapp.framework.database.getDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.isRepeatedAfterReinstall
@@ -36,10 +38,23 @@ data class LibraryAfterStart(
 )
 
 /**
+ * Checks the search indexes and the dictionary once the main window is up. They only degrade the
+ * app, so the first window does not wait for them: the check before it covers only the database and
+ * the catalog. Never throws: it runs in a launched effect, so a failure is logged and counts as no
+ * problem. Runs its file work on the IO dispatcher.
+ */
+internal suspend fun checkOptionalLibraryParts(ioDispatcher: CoroutineDispatcher = Dispatchers.IO): List<LibraryProblem> =
+    runSuspendCatching { withContext(ioDispatcher) { installedDatabase()?.let { checkOptionalParts(libraryFilesFor(it)) }.orEmpty() } }
+        .onFailure { e -> errorln(e) { "[LibraryHealth] the indexes and the dictionary could not be checked; carrying on without it" } }
+        .getOrDefault(emptyList())
+        .also { problems -> if (problems.isNotEmpty()) warnln { "[LibraryHealth] missing optional parts: $problems" } }
+
+/**
  * Reads the installed library back once, when needed (see [shouldVerifyLibrary]), and decides
  * whether a reinstall is still worth offering for [degraded] and the damage found. An intact library
  * is remembered and not read again; a damaged one is checked again on every launch until it is
- * reinstalled. Runs its file work on the IO dispatcher.
+ * reinstalled. Once nothing is wrong, the last reinstall is forgotten (see [canForgetReinstall]).
+ * Runs its file work on the IO dispatcher.
  *
  * @param installedThisSession true when this session showed onboarding or the reinstall window.
  */
@@ -78,7 +93,8 @@ private suspend fun checkLibrary(
         val problems = (degraded + damaged.map(DamagedPart::asProblem)).distinct()
         val marker = AppSettings.getLastReinstallMarker()
         val modified = modifiedTime(database)
-        if (problems.isEmpty() && outcome == Verification.Intact && marker != null) {
+        val readBackIntact = outcome == Verification.Intact
+        if (marker != null && canForgetReinstall(problems, installedThisSession, PortableEnvironment.isPortable, readBackIntact)) {
             // Everything is fine now: forget the last reinstall.
             AppSettings.setLastReinstallMarker(null)
         }

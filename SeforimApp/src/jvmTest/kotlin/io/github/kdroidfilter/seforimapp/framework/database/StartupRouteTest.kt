@@ -47,12 +47,12 @@ class StartupRouteTest {
 
     @Test
     fun `healthy library of a compatible version opens the main window`() {
-        assertEquals(StartupRoute.Main(emptyList()), route())
+        assertEquals(StartupRoute.Main, route())
     }
 
     @Test
-    fun `missing optional parts open the main window with a warning`() {
-        assertEquals(StartupRoute.Main(listOf(LibraryProblem.TextIndexMissing)), route(health = noIndex))
+    fun `missing optional parts do not keep the main window from opening`() {
+        assertEquals(StartupRoute.Main, route(health = noIndex))
     }
 
     @Test
@@ -91,5 +91,20 @@ class StartupRouteTest {
         assertFalse(isRepeatedAfterReinstall(marker, listOf(LibraryProblem.DatabaseEmpty), databaseModified = 2_000L))
         assertFalse(isRepeatedAfterReinstall(null, problems, databaseModified = 2_000L))
         assertFalse(isRepeatedAfterReinstall("garbage", problems, databaseModified = 2_000L))
+    }
+
+    @Test
+    fun `the last reinstall is forgotten only when a later launch finds nothing wrong`() {
+        val none = emptyList<LibraryProblem>()
+        val missing = listOf(LibraryProblem.TextIndexMissing)
+
+        assertTrue(canForgetReinstall(none, installedThisSession = false, isPortable = false, readBackIntact = false))
+        assertFalse(canForgetReinstall(missing, installedThisSession = false, isPortable = false, readBackIntact = false))
+        assertFalse(
+            canForgetReinstall(none, installedThisSession = true, isPortable = false, readBackIntact = false),
+            "the next launch must still see the same problems coming back",
+        )
+        assertFalse(canForgetReinstall(none, installedThisSession = false, isPortable = true, readBackIntact = false), "not read back yet")
+        assertTrue(canForgetReinstall(none, installedThisSession = false, isPortable = true, readBackIntact = true))
     }
 }
