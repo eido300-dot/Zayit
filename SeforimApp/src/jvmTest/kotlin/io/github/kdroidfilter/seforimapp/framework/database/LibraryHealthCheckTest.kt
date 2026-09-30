@@ -252,15 +252,15 @@ class LibraryHealthCheckTest {
     private class RecordingProbe : LibraryProbe {
         val reads = mutableSetOf<Path>()
 
-        override fun size(path: Path): Long? = 1_000_000L.also { reads += path }
+        override fun size(path: Path): Long? = 1_000_000L.also { reads.add(path) }
 
-        override fun header(database: Path) = SqliteHeader(pageSize = 4096, pageCount = null).also { reads += database }
+        override fun header(database: Path) = SqliteHeader(pageSize = 4096, pageCount = null).also { reads.add(database) }
 
-        override fun bookTable(database: Path) = BookTableState.HasBooks.also { reads += database }
+        override fun bookTable(database: Path) = BookTableState.HasBooks.also { reads.add(database) }
 
-        override fun luceneIndexComplete(directory: Path) = true.also { reads += directory }
+        override fun luceneIndexComplete(directory: Path) = true.also { reads.add(directory) }
 
-        override fun dictionaryValid(dictionary: Path) = true.also { reads += dictionary }
+        override fun dictionaryValid(dictionary: Path) = true.also { reads.add(dictionary) }
     }
 
     @Test

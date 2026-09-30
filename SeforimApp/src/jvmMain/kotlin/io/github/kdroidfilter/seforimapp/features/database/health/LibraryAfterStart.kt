@@ -41,7 +41,7 @@ data class LibraryAfterStart(
  * Checks the search indexes and the dictionary once the main window is up. They only degrade the
  * app, so the first window does not wait for them: the check before it covers only the database and
  * the catalog. Never throws: it runs in a launched effect, so a failure is logged and the result is
- * null, which proves nothing about the library; so is the result when no database is installed. Runs
+ * null, which proves nothing about the library. It is also null when no database is installed. Runs
  * its file work on the IO dispatcher.
  */
 internal suspend fun checkOptionalLibraryParts(ioDispatcher: CoroutineDispatcher = Dispatchers.IO): List<LibraryProblem>? =
@@ -79,8 +79,9 @@ internal suspend fun reinstallHelpsFor(
  * Runs its file work on the IO dispatcher.
  *
  * @param installedThisSession true when this session showed onboarding or the reinstall window.
- * @param libraryChecked false when the startup check or [checkOptionalLibraryParts] failed, or the
- *   book table could not be looked at, so nothing is known to be fine and the last reinstall is not forgotten.
+ * @param libraryChecked false when the startup check failed, [checkOptionalLibraryParts] returned
+ *   null, or the book table could not be looked at, so nothing is known to be fine and the last
+ *   reinstall is not forgotten.
  */
 suspend fun checkLibraryAfterStart(
     installedThisSession: Boolean,
