@@ -163,6 +163,7 @@ class LibraryHealthCheckTest {
         assertEquals(listOf(LibraryProblem.CatalogMissing, LibraryProblem.DictionaryMissing), health.problems)
         assertTrue(health.needsReinstall)
         assertEquals(listOf(LibraryProblem.DictionaryMissing), checkOptionalParts(files, dictionaryOverridden = false))
+        assertEquals(Severity.Degraded, LibraryProblem.DictionaryMissing.severity)
     }
 
     @Test
@@ -172,10 +173,9 @@ class LibraryHealthCheckTest {
         Files.delete(files.dictionary)
 
         assertTrue(checkRequiredParts(files).isHealthy)
-        assertEquals(
-            listOf(LibraryProblem.TextIndexMissing, LibraryProblem.DictionaryMissing),
-            checkOptionalParts(files, dictionaryOverridden = false),
-        )
+        val optional = checkOptionalParts(files, dictionaryOverridden = false)
+        assertEquals(listOf(LibraryProblem.TextIndexMissing, LibraryProblem.DictionaryMissing), optional)
+        assertTrue(optional.all { it.severity == Severity.Degraded }, "what the window does not wait for only degrades the app")
     }
 
     @Test
@@ -248,30 +248,30 @@ class LibraryHealthCheckTest {
         override fun dictionaryValid(dictionary: Path) = true
     }
 
-    /** A healthy library that records which reads were made. */
+    /** A healthy library that records which files were read. */
     private class RecordingProbe : LibraryProbe {
-        val reads = mutableSetOf<String>()
+        val reads = mutableSetOf<Path>()
 
-        override fun size(path: Path): Long? = 1_000_000L.also { reads += "size" }
+        override fun size(path: Path): Long? = 1_000_000L.also { reads += path }
 
-        override fun header(database: Path) = SqliteHeader(pageSize = 4096, pageCount = null).also { reads += "header" }
+        override fun header(database: Path) = SqliteHeader(pageSize = 4096, pageCount = null).also { reads += database }
 
-        override fun bookTable(database: Path) = BookTableState.HasBooks.also { reads += "bookTable" }
+        override fun bookTable(database: Path) = BookTableState.HasBooks.also { reads += database }
 
-        override fun luceneIndexComplete(directory: Path) = true.also { reads += "luceneIndexComplete" }
+        override fun luceneIndexComplete(directory: Path) = true.also { reads += directory }
 
-        override fun dictionaryValid(dictionary: Path) = true.also { reads += "dictionaryValid" }
+        override fun dictionaryValid(dictionary: Path) = true.also { reads += dictionary }
     }
 
     @Test
     fun `each half of the check reads only its own parts`() {
         val required = RecordingProbe()
         assertTrue(checkRequiredParts(files, required).isHealthy)
-        assertEquals(setOf("size", "header", "bookTable"), required.reads)
+        assertEquals(setOf(files.database, files.catalog), required.reads)
 
         val optional = RecordingProbe()
         assertEquals(emptyList(), checkOptionalParts(files, optional, dictionaryOverridden = false))
-        assertEquals(setOf("luceneIndexComplete", "dictionaryValid"), optional.reads)
+        assertEquals(setOf(files.textIndex, files.lookupIndex, files.dictionary), optional.reads)
     }
 
     @Test

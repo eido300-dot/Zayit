@@ -4,8 +4,13 @@ package io.github.kdroidfilter.seforimapp.framework.database
 sealed interface StartupRoute {
     data object Onboarding : StartupRoute
 
-    /** The main window. Missing optional parts are found once it is up, and shown in its banner. */
-    data object Main : StartupRoute
+    /**
+     * The main window. Missing optional parts are found once it is up, and shown in its banner.
+     * [libraryChecked] is false when the startup check failed and the app opened without it.
+     */
+    data class Main(
+        val libraryChecked: Boolean,
+    ) : StartupRoute
 
     /** The database update window: a reinstall when [problems] is not empty, a version update otherwise. */
     data class Update(
@@ -57,7 +62,7 @@ internal fun routeStartup(
         }
     }
     if (!versionCompatible) return StartupRoute.Update(emptyList())
-    return StartupRoute.Main
+    return StartupRoute.Main(libraryChecked = true)
 }
 
 /**
@@ -77,16 +82,18 @@ internal fun decodeProblems(text: String): List<LibraryProblem> =
     text.split(',').mapNotNull { name -> LibraryProblem.entries.firstOrNull { it.name == name.trim() } }
 
 /**
- * Whether the record of the last reinstall can be dropped: nothing is wrong any more, on a launch
- * after the one that installed, whose next launch must still recognize the same problems coming
- * back. On a drive, only once the library was read back intact ([readBackIntact]).
+ * Whether the record of the last reinstall can be dropped: every check ran ([libraryChecked]) and
+ * found nothing wrong, on a launch after the one that installed, whose next launch must still
+ * recognize the same problems coming back. On a drive, only once the library was read back intact
+ * ([readBackIntact]).
  */
 internal fun canForgetReinstall(
     problems: List<LibraryProblem>,
+    libraryChecked: Boolean,
     installedThisSession: Boolean,
     isPortable: Boolean,
     readBackIntact: Boolean,
-): Boolean = problems.isEmpty() && !installedThisSession && (readBackIntact || !isPortable)
+): Boolean = libraryChecked && problems.isEmpty() && !installedThisSession && (readBackIntact || !isPortable)
 
 internal fun isRepeatedAfterReinstall(
     marker: String?,

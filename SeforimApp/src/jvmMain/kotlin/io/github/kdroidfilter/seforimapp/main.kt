@@ -52,6 +52,7 @@ import io.github.kdroidfilter.seforimapp.features.database.health.LibraryDegrade
 import io.github.kdroidfilter.seforimapp.features.database.health.asProblem
 import io.github.kdroidfilter.seforimapp.features.database.health.checkLibraryAfterStart
 import io.github.kdroidfilter.seforimapp.features.database.health.checkOptionalLibraryParts
+import io.github.kdroidfilter.seforimapp.features.database.health.reinstallHelpsFor
 import io.github.kdroidfilter.seforimapp.features.database.health.requestLibraryReinstall
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
@@ -119,12 +120,12 @@ private val AOT_TRAINING_DURATION = 45.seconds
 private fun computeStartupRoute(): StartupRoute =
     runSuspendCatching { readStartupRoute() }
         .onFailure { errorln(it) { "[startup] the library check failed; opening the app without it" } }
-        .getOrElse { StartupRoute.Main }
+        .getOrElse { StartupRoute.Main(libraryChecked = false) }
 
 /**
  * Determines the initial route synchronously: settings, file sizes, the 100-byte database header
  * and one read-only query. All fast local I/O, well under a second. The indexes and the dictionary
- * are checked once the main window is up (checkOptionalLibraryParts).
+ * are checked once the main window is up ([checkOptionalLibraryParts]).
  */
 private fun readStartupRoute(): StartupRoute {
     if (!AppSettings.isOnboardingFinished()) return StartupRoute.Onboarding
@@ -305,11 +306,11 @@ fun main(args: Array<String>) {
         // Get MainAppState from DI graph
         val mainAppState = appGraph.mainAppState
 
-        // Startup routing reads settings and the database header. On a slow
+        // Startup routing reads settings, the database and the catalog. On a slow
         // or network drive that can take seconds, so it runs off the UI thread while
         // LibraryCheckWindow stands in (hidden unless it takes long). It is null until known.
         // A copy that found the drive in use only shows DriveInUseWindow and must write nothing.
-        var startupRoute by remember { mutableStateOf<StartupRoute?>(if (driveInUse) StartupRoute.Main else null) }
+        var startupRoute by remember { mutableStateOf<StartupRoute?>(if (driveInUse) StartupRoute.Main(libraryChecked = false) else null) }
         LaunchedEffect(Unit) {
             if (startupRoute == null) {
                 startupRoute =
@@ -376,7 +377,6 @@ fun main(args: Array<String>) {
                             // After database update, refresh the version check and show main app
                             showDatabaseUpdate = false
                             libraryProblems = emptyList()
-                            degradedProblems = emptyList()
                         },
                         isDatabaseMissing = libraryProblems.isNotEmpty(),
                         problems = libraryProblems,
@@ -606,11 +606,16 @@ fun main(args: Array<String>) {
                             // whose reads hit the cache.
                             LaunchedEffect(Unit) {
                                 val degraded = checkOptionalLibraryParts()
-                                degradedProblems = degraded
+                                // The banner's offer is right from the start, not only after the read-back,
+                                // which takes minutes on a drive.
+                                if (!degraded.isNullOrEmpty()) reinstallHelps = reinstallHelpsFor(degraded)
+                                degradedProblems = degraded.orEmpty()
+                                val startupChecked = (startupRoute as? StartupRoute.Main)?.libraryChecked ?: true
                                 val found =
                                     checkLibraryAfterStart(
                                         installedThisSession = startupRoute !is StartupRoute.Main,
-                                        degraded = degraded,
+                                        degraded = degraded.orEmpty(),
+                                        libraryChecked = startupChecked && degraded != null,
                                     )
                                 damagedParts = found.damaged
                                 reinstallHelps = found.reinstallHelps
@@ -753,5 +758,5 @@ private fun StartupRoute.libraryProblems(): List<LibraryProblem> =
     when (this) {
         is StartupRoute.Update -> problems
         is StartupRoute.LibraryError -> problems
-        StartupRoute.Main, StartupRoute.Onboarding -> emptyList()
+        is StartupRoute.Main, StartupRoute.Onboarding -> emptyList()
     }

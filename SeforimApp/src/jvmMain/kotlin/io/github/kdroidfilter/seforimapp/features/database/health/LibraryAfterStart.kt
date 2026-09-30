@@ -40,14 +40,34 @@ data class LibraryAfterStart(
 /**
  * Checks the search indexes and the dictionary once the main window is up. They only degrade the
  * app, so the first window does not wait for them: the check before it covers only the database and
- * the catalog. Never throws: it runs in a launched effect, so a failure is logged and counts as no
- * problem. Runs its file work on the IO dispatcher.
+ * the catalog. Never throws: it runs in a launched effect, so a failure is logged and the result is
+ * null, which proves nothing about the library. Runs its file work on the IO dispatcher.
  */
-internal suspend fun checkOptionalLibraryParts(ioDispatcher: CoroutineDispatcher = Dispatchers.IO): List<LibraryProblem> =
-    runSuspendCatching { withContext(ioDispatcher) { installedDatabase()?.let { checkOptionalParts(libraryFilesFor(it)) }.orEmpty() } }
-        .onFailure { e -> errorln(e) { "[LibraryHealth] the indexes and the dictionary could not be checked; carrying on without it" } }
-        .getOrDefault(emptyList())
-        .also { problems -> if (problems.isNotEmpty()) warnln { "[LibraryHealth] missing optional parts: $problems" } }
+internal suspend fun checkOptionalLibraryParts(ioDispatcher: CoroutineDispatcher = Dispatchers.IO): List<LibraryProblem>? =
+    runSuspendCatching {
+        withContext(ioDispatcher) {
+            val database = installedDatabase() ?: return@withContext emptyList<LibraryProblem>()
+            checkOptionalParts(libraryFilesFor(database))
+        }
+    }.onFailure { e -> errorln(e) { "[LibraryHealth] the indexes and the dictionary could not be checked; carrying on without them" } }
+        .getOrNull()
+        ?.also { problems -> if (problems.isNotEmpty()) warnln { "[LibraryHealth] missing optional parts: $problems" } }
+
+/**
+ * Whether a reinstall is still worth offering for [problems]: false when one already ran for these
+ * same problems and did not fix them. Never throws; when it cannot tell, the reinstall stays offered.
+ * Runs its file work on the IO dispatcher.
+ */
+internal suspend fun reinstallHelpsFor(
+    problems: List<LibraryProblem>,
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+): Boolean =
+    runSuspendCatching {
+        withContext(ioDispatcher) {
+            val database = installedDatabase() ?: return@withContext true
+            !isRepeatedAfterReinstall(AppSettings.getLastReinstallMarker(), problems, modifiedTime(database))
+        }
+    }.getOrDefault(true)
 
 /**
  * Reads the installed library back once, when needed (see [shouldVerifyLibrary]), and decides
@@ -57,15 +77,18 @@ internal suspend fun checkOptionalLibraryParts(ioDispatcher: CoroutineDispatcher
  * Runs its file work on the IO dispatcher.
  *
  * @param installedThisSession true when this session showed onboarding or the reinstall window.
+ * @param libraryChecked false when the startup check or [checkOptionalLibraryParts] failed, so
+ *   nothing is known to be fine and the last reinstall is not forgotten.
  */
 suspend fun checkLibraryAfterStart(
     installedThisSession: Boolean,
     degraded: List<LibraryProblem>,
+    libraryChecked: Boolean,
     verifier: LibraryVerifier = LibraryVerifier(),
     ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     startDelayMillis: Long = VERIFY_START_DELAY_MILLIS,
 ): LibraryAfterStart =
-    runSuspendCatching { checkLibrary(installedThisSession, degraded, verifier, ioDispatcher, startDelayMillis) }
+    runSuspendCatching { checkLibrary(installedThisSession, degraded, libraryChecked, verifier, ioDispatcher, startDelayMillis) }
         .onFailure { e ->
             // Runs in a launched effect, where an exception would repeat on every launch and take the
             // app down. Nothing was remembered as verified, so the next launch tries again.
@@ -82,6 +105,7 @@ private const val VERIFY_START_DELAY_MILLIS = 30_000L
 private suspend fun checkLibrary(
     installedThisSession: Boolean,
     degraded: List<LibraryProblem>,
+    libraryChecked: Boolean,
     verifier: LibraryVerifier,
     ioDispatcher: CoroutineDispatcher,
     startDelayMillis: Long,
@@ -93,8 +117,15 @@ private suspend fun checkLibrary(
         val problems = (degraded + damaged.map(DamagedPart::asProblem)).distinct()
         val marker = AppSettings.getLastReinstallMarker()
         val modified = modifiedTime(database)
-        val readBackIntact = outcome == Verification.Intact
-        if (marker != null && canForgetReinstall(problems, installedThisSession, PortableEnvironment.isPortable, readBackIntact)) {
+        val forget =
+            canForgetReinstall(
+                problems = problems,
+                libraryChecked = libraryChecked,
+                installedThisSession = installedThisSession,
+                isPortable = PortableEnvironment.isPortable,
+                readBackIntact = outcome == Verification.Intact,
+            )
+        if (marker != null && forget) {
             // Everything is fine now: forget the last reinstall.
             AppSettings.setLastReinstallMarker(null)
         }

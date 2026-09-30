@@ -37,7 +37,7 @@ enum class LibraryProblem(
     DictionaryMissing(Severity.Degraded),
 }
 
-/** The result of [checkLibraryHealth]. */
+/** The result of [checkLibraryHealth] or [checkRequiredParts]. */
 data class LibraryHealth(
     val problems: List<LibraryProblem>,
 ) {
@@ -59,7 +59,10 @@ data class SqliteHeader(
  */
 enum class BookTableState { HasBooks, NoBooks, NoTable, Unreadable, Inconclusive }
 
-/** File system and database reads behind [checkLibraryHealth], replaceable in tests. None of them writes anything. */
+/**
+ * File system and database reads behind [checkRequiredParts] and [checkOptionalParts], replaceable
+ * in tests. None of them writes anything.
+ */
 interface LibraryProbe {
     /** Size of the regular file at [path], or null when there is none. */
     fun size(path: Path): Long?

@@ -47,12 +47,12 @@ class StartupRouteTest {
 
     @Test
     fun `healthy library of a compatible version opens the main window`() {
-        assertEquals(StartupRoute.Main, route())
+        assertEquals(StartupRoute.Main(libraryChecked = true), route())
     }
 
     @Test
     fun `missing optional parts do not keep the main window from opening`() {
-        assertEquals(StartupRoute.Main, route(health = noIndex))
+        assertEquals(StartupRoute.Main(libraryChecked = true), route(health = noIndex))
     }
 
     @Test
@@ -95,16 +95,20 @@ class StartupRouteTest {
 
     @Test
     fun `the last reinstall is forgotten only when a later launch finds nothing wrong`() {
-        val none = emptyList<LibraryProblem>()
-        val missing = listOf(LibraryProblem.TextIndexMissing)
+        fun forget(
+            problems: List<LibraryProblem> = emptyList(),
+            checked: Boolean = true,
+            installed: Boolean = false,
+            portable: Boolean = false,
+            readBack: Boolean = false,
+        ) = canForgetReinstall(problems, checked, installed, portable, readBack)
 
-        assertTrue(canForgetReinstall(none, installedThisSession = false, isPortable = false, readBackIntact = false))
-        assertFalse(canForgetReinstall(missing, installedThisSession = false, isPortable = false, readBackIntact = false))
-        assertFalse(
-            canForgetReinstall(none, installedThisSession = true, isPortable = false, readBackIntact = false),
-            "the next launch must still see the same problems coming back",
-        )
-        assertFalse(canForgetReinstall(none, installedThisSession = false, isPortable = true, readBackIntact = false), "not read back yet")
-        assertTrue(canForgetReinstall(none, installedThisSession = false, isPortable = true, readBackIntact = true))
+        assertTrue(forget())
+        assertFalse(forget(problems = listOf(LibraryProblem.TextIndexMissing)))
+        assertFalse(forget(checked = false), "a check that failed proves nothing")
+        assertFalse(forget(installed = true), "the next launch must still see the same problems coming back")
+        assertFalse(forget(portable = true), "not read back yet")
+        assertTrue(forget(portable = true, readBack = true))
+        assertFalse(forget(problems = listOf(LibraryProblem.DictionaryMissing), portable = true, readBack = true))
     }
 }
