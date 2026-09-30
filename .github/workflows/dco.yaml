@@ -23,8 +23,18 @@ jobs:
 
             const signOffRegex = /^Signed-off-by: .+ <.+@.+>$/m;
             const failures = [];
+            let skipped = 0;
 
             for (const c of commits) {
+              // Commits nobody here can sign: those of bot accounts (upstream's download-count bot) and
+              // the merge commits GitHub itself creates (committed by web-flow) when a pull request is
+              // merged on the website.
+              const isBot = c.author?.type === "Bot";
+              const isGitHubMerge = c.parents.length > 1 && c.committer?.login === "web-flow";
+              if (isBot || isGitHubMerge) {
+                skipped++;
+                continue;
+              }
               const message = c.commit.message || "";
               if (!signOffRegex.test(message)) {
                 failures.push(`${c.sha.substring(0, 7)} — ${message.split("\n")[0]}`);
@@ -38,5 +48,5 @@ jobs:
                 failures.map((f) => `  - ${f}`).join("\n")
               );
             } else {
-              core.info(`All ${commits.length} commit(s) are signed off.`);
+              core.info(`${commits.length - skipped} commit(s) signed off; ${skipped} bot or GitHub merge commit(s) skipped.`);
             }
