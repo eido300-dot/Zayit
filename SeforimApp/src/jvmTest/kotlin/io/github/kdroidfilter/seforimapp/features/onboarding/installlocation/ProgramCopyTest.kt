@@ -109,7 +109,8 @@ class ProgramCopyTest {
 
     @Test
     fun `finding how to flush a drive leaves nothing behind`() {
-        val flush = DeviceFlush.forDrive(root)
+        // As on macOS, so that the drive is probed with a scratch file here too.
+        val flush = DeviceFlush.forDrive(root, isMacOS = true)
 
         FileChannel.open(Files.write(root.resolve("flushed.bin"), byteArrayOf(1)), WRITE).use { channel ->
             flush.open(channel, root.resolve("flushed.bin")).use { it.flush(metadata = true) }

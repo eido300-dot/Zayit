@@ -226,17 +226,20 @@ internal class DeviceFlush(
         /** Per drive, whether it refuses a full flush; only asked on macOS. */
         private val refusingDrives = ConcurrentHashMap<FileStore, Boolean>()
 
-        /** The flush for files written in [dir]. */
+        /** The flush for files written in [dir]; [isMacOS] is for tests. */
         @Throws(IOException::class)
-        fun forDrive(dir: Path): DeviceFlush {
-            if (!PlatformInfo.isMacOS) return DeviceFlush()
+        fun forDrive(
+            dir: Path,
+            isMacOS: Boolean = PlatformInfo.isMacOS,
+        ): DeviceFlush {
+            if (!isMacOS) return DeviceFlush()
             return DeviceFlush(fullFlushRefused = refusingDrives.getOrPut(Files.getFileStore(dir)) { refusesFullFlush(dir) })
         }
 
         private fun refusesFullFlush(dir: Path): Boolean {
             val probe = Files.createTempFile(dir, ".zayit-flush", null)
             return try {
-                FileChannel.open(probe, WRITE).use { it.force(true) }
+                FileChannel.open(probe, WRITE, NOFOLLOW_LINKS).use { it.force(true) }
                 false
             } catch (e: IOException) {
                 warnln(e) { "[portable-install] this drive refuses a full flush, using fsync" }
