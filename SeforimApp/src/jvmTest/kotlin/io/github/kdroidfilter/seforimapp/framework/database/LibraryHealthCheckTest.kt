@@ -220,4 +220,50 @@ class LibraryHealthCheckTest {
         assertEquals(root.resolve("lexical.db"), files.dictionary)
         assertEquals(root.resolve("catalog.pb"), files.catalog)
     }
+
+    private class FixedProbe(
+        private val table: BookTableState,
+    ) : LibraryProbe {
+        override fun size(path: Path): Long? = 1_000_000L
+
+        override fun header(database: Path) = SqliteHeader(pageSize = 4096, pageCount = null)
+
+        override fun bookTable(database: Path) = table
+
+        override fun luceneIndexComplete(directory: Path) = true
+
+        override fun dictionaryValid(dictionary: Path) = true
+    }
+
+    @Test
+    fun `a check that could not run is not a damaged database`() {
+        assertEquals(emptyList(), checkLibraryHealth(files, FixedProbe(BookTableState.Inconclusive), false).problems)
+        assertEquals(
+            listOf(LibraryProblem.DatabaseUnreadable),
+            checkLibraryHealth(files, FixedProbe(BookTableState.Unreadable), false).problems,
+        )
+    }
+
+    @Test
+    fun `only SQLite reporting a damaged file counts as damage`() {
+        assertTrue(java.sql.SQLException("x", null, 11).reportsDamagedFile())
+        assertTrue(java.sql.SQLException("x", null, 26).reportsDamagedFile())
+        // Extended result codes keep the primary code in the low byte (SQLITE_CORRUPT_VTAB = 267).
+        assertTrue(java.sql.SQLException("x", null, 267).reportsDamagedFile())
+        assertFalse(java.sql.SQLException("x", null, 14).reportsDamagedFile()) // cannot open
+        assertFalse(java.sql.SQLException("x", null, 10).reportsDamagedFile()) // I/O error
+        assertFalse(java.sql.SQLException("x", null, 5).reportsDamagedFile()) // busy
+        assertFalse(java.sql.SQLException("Error opening connection").reportsDamagedFile()) // native library
+    }
+
+    @Test
+    fun `a really corrupted database is damaged and a database that cannot be opened is not`() {
+        createBooksDatabase(books = 2000, padding = 200)
+        val bytes = Files.readAllBytes(files.database)
+        for (i in 4096 until 8192) bytes[i] = 0x5A
+        Files.write(files.database, bytes)
+        assertEquals(BookTableState.Unreadable, RealLibraryProbe.bookTable(files.database))
+
+        assertEquals(BookTableState.Inconclusive, RealLibraryProbe.bookTable(root.resolve("missing/none.db")))
+    }
 }

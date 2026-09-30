@@ -6,6 +6,7 @@ import com.russhwolf.settings.set
 import io.github.kdroidfilter.seforimapp.core.presentation.theme.AccentColor
 import io.github.kdroidfilter.seforimapp.core.presentation.theme.IntUiThemes
 import io.github.kdroidfilter.seforimapp.core.presentation.theme.ThemeStyle
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -71,6 +72,9 @@ object AppSettings {
     // Problems for which a reinstall was last offered (see isRepeatedAfterReinstall)
     private const val KEY_LAST_REINSTALL_PROBLEMS = "last_reinstall_problems"
 
+    // Fingerprint of the library last read back intact (see LibraryVerifier)
+    private const val KEY_LIBRARY_VERIFIED = "library_verified"
+
     // Library problems the user asked to reinstall from the banner; handled at the next launch
     private const val KEY_REINSTALL_REQUESTED = "reinstall_requested"
 
@@ -99,7 +103,7 @@ object AppSettings {
 
     // Backing Settings storage (can be replaced at startup if needed)
     @Volatile
-    private var settings: Settings = Settings()
+    private var settings: Settings = AppSettingsStore.settings
 
     // Allow optional initialization with an externally provided Settings instance
     fun initialize(settings: Settings) {
@@ -316,20 +320,16 @@ object AppSettings {
 
     // Database path settings
     // Returns null if not configured or if stored as an empty string
+    // Portable mode never uses a stored path: see effectiveStoredDatabasePath.
     fun getDatabasePath(): String? {
         val value: String = settings[KEY_DATABASE_PATH, ""]
-        return value.ifBlank { null }
+        return effectiveStoredDatabasePath(value, PortableEnvironment.isPortable)
     }
 
     fun setDatabasePath(path: String?) {
-        if (path == null || path.isBlank()) {
-            // Clear by setting empty string
-            settings[KEY_DATABASE_PATH] = ""
-            _databasePathFlow.value = null
-        } else {
-            settings[KEY_DATABASE_PATH] = path
-            _databasePathFlow.value = path
-        }
+        val stored = databasePathToStore(path, PortableEnvironment.isPortable)
+        settings[KEY_DATABASE_PATH] = stored
+        _databasePathFlow.value = stored.ifBlank { null }
     }
 
     // Session persistence preference
@@ -424,6 +424,12 @@ object AppSettings {
 
     fun setLastReinstallMarker(marker: String?) {
         settings[KEY_LAST_REINSTALL_PROBLEMS] = marker.orEmpty()
+    }
+
+    fun getVerifiedLibrary(): String? = settings[KEY_LIBRARY_VERIFIED, ""].ifBlank { null }
+
+    fun setVerifiedLibrary(fingerprint: String?) {
+        settings[KEY_LIBRARY_VERIFIED] = fingerprint.orEmpty()
     }
 
     fun getReinstallRequest(): String? = settings[KEY_REINSTALL_REQUESTED, ""].ifBlank { null }
@@ -548,6 +554,8 @@ object AppSettings {
     // Clears all persisted settings and resets in-memory flows to defaults
     fun clearAll() {
         settings.clear()
+        // Portable: also delete the .bak copies, or the old values would load again next launch.
+        AppSettingsStore.resetPortableFiles()
         _textSizeFlow.value = DEFAULT_TEXT_SIZE
         _lineHeightFlow.value = DEFAULT_LINE_HEIGHT
         _maxCommentatorsPerPageFlow.value = DEFAULT_MAX_COMMENTATORS_PER_PAGE

@@ -54,8 +54,12 @@ data class SqliteHeader(
     val pageCount: Long?,
 )
 
-/** What a read-only look at the `book` table found. */
-enum class BookTableState { HasBooks, NoBooks, NoTable, Unreadable }
+/**
+ * What a read-only look at the `book` table found. [Unreadable] means SQLite itself reported a
+ * damaged file; [Inconclusive] means the look could not be made (the native library did not load,
+ * the drive stopped answering), which says nothing about the file and must never lead to a reinstall.
+ */
+enum class BookTableState { HasBooks, NoBooks, NoTable, Unreadable, Inconclusive }
 
 /** File system and database reads behind [checkLibraryHealth], replaceable in tests. None of them writes anything. */
 interface LibraryProbe {
@@ -78,7 +82,8 @@ interface LibraryProbe {
  * pragma would write a fresh, empty database over a 0-byte file, and turn a damaged one into a
  * crash in the main window. There is no `integrity_check`, which takes minutes on 7.5 GB.
  *
- * Never throws. [dictionaryOverridden] is true when a dictionary is configured elsewhere
+ * Never throws what a probe can be expected to hit: a failure that is not a damaged file (a missing
+ * native library, a drive that stops answering) is logged and counts as no problem. [dictionaryOverridden] is true when a dictionary is configured elsewhere
  * (`-DmagicDict`, `SEFORIM_MAGIC_DICT`), so a missing `lexical.db` is not reported.
  */
 internal fun checkLibraryHealth(
@@ -108,8 +113,26 @@ private fun databaseProblem(
         BookTableState.HasBooks -> null
         BookTableState.NoBooks, BookTableState.NoTable -> LibraryProblem.DatabaseEmpty
         BookTableState.Unreadable -> LibraryProblem.DatabaseUnreadable
+        BookTableState.Inconclusive -> null
     }
 }
+
+private const val SQLITE_ERROR = 1
+private const val SQLITE_CORRUPT = 11
+private const val SQLITE_NOTADB = 26
+
+/**
+ * True when SQLite itself reported that the file is damaged (`SQLITE_CORRUPT`, `SQLITE_NOTADB`).
+ * Every other failure, including one that never came from SQLite (the native library could not be
+ * loaded, so the error code is 0), says the check could not run and nothing about the file. The
+ * primary result code is the low byte of the vendor code. sqlite-jdbc is a runtime dependency, so
+ * its exception class is not referenced here.
+ */
+internal fun SQLException.reportsDamagedFile(): Boolean = (errorCode and 0xFF) in setOf(SQLITE_CORRUPT, SQLITE_NOTADB)
+
+/** A missing table is reported by SQLite as a plain `SQLITE_ERROR` with this text. */
+private fun SQLException.reportsMissingTable(): Boolean =
+    (errorCode and 0xFF) == SQLITE_ERROR && message.orEmpty().contains("no such table", ignoreCase = true)
 
 private fun isDictionaryOverridden(): Boolean =
     listOf(System.getProperty("magicDict"), System.getenv("SEFORIM_MAGIC_DICT")).any { !it.isNullOrBlank() }
@@ -210,12 +233,20 @@ object RealLibraryProbe : LibraryProbe {
                 if (rows.next() && rows.getInt(1) == 1) BookTableState.HasBooks else BookTableState.NoBooks
             }
         } catch (e: SQLException) {
-            if (e.message.orEmpty().contains("no such table", ignoreCase = true)) {
-                BookTableState.NoTable
-            } else {
-                warnln(e) { "[LibraryHealth] the books database cannot be read" }
-                BookTableState.Unreadable
+            when {
+                e.reportsMissingTable() -> BookTableState.NoTable
+                e.reportsDamagedFile() -> {
+                    warnln(e) { "[LibraryHealth] the books database is damaged" }
+                    BookTableState.Unreadable
+                }
+                else -> {
+                    warnln(e) { "[LibraryHealth] the books database could not be checked; not treating it as damaged" }
+                    BookTableState.Inconclusive
+                }
             }
+        } catch (e: LinkageError) {
+            warnln(e) { "[LibraryHealth] the SQLite library did not load; not treating the database as damaged" }
+            BookTableState.Inconclusive
         }
 
     override fun luceneIndexComplete(directory: Path): Boolean {
@@ -246,7 +277,11 @@ object RealLibraryProbe : LibraryProbe {
             names.containsAll(DICTIONARY_TABLES)
         } catch (e: SQLException) {
             warnln(e) { "[LibraryHealth] dictionary cannot be read" }
-            false
+            // Only a damaged file counts as a missing dictionary; a check that could not run does not.
+            !e.reportsDamagedFile()
+        } catch (e: LinkageError) {
+            warnln(e) { "[LibraryHealth] the SQLite library did not load; not treating the dictionary as damaged" }
+            true
         }
     }
 }

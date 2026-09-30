@@ -1,6 +1,8 @@
 package io.github.kdroidfilter.seforimapp.features.onboarding.download
 
+import io.github.kdroidfilter.seforimapp.framework.io.ChunkedSync
 import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.kdroidfilter.seforimapp.network.HttpsConnectionFactory
 import io.github.kdroidfilter.seforimapp.releasefetcher.github.GitHubReleaseFetcher
 import io.github.vinceglb.filekit.FileKit
@@ -157,11 +159,14 @@ class DownloadUseCase(
                     // `dest` that the extraction step would then treat as a complete download.
                     dest.writeAtomically { out ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        // On a drive, progress follows what reached the device: see ChunkedSync.
+                        val chunks = if (PortableEnvironment.isPortable) ChunkedSync { out.fd.sync() } else null
                         var total = 0L
                         while (true) {
                             val read = input.read(buffer)
                             if (read <= 0) break
                             out.write(buffer, 0, read)
+                            chunks?.wrote(read)
                             total += read
                             onBytes(total, totalLength)
                         }

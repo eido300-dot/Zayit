@@ -21,6 +21,7 @@ import com.kdroid.gematria.converter.toHebrewNumeral
 import dev.nucleusframework.application.aotTraining
 import dev.nucleusframework.application.nucleusApplication
 import dev.nucleusframework.core.runtime.NucleusApp
+import dev.nucleusframework.core.runtime.SingleInstanceManager
 import dev.nucleusframework.energymanager.EnergyManager
 import dev.nucleusframework.window.jewel.JewelDecoratedWindow
 import dev.zacsweers.metro.createGraph
@@ -30,6 +31,7 @@ import io.github.kdroidfilter.seforim.tabs.TabType
 import io.github.kdroidfilter.seforim.tabs.TabsDestination
 import io.github.kdroidfilter.seforim.tabs.TabsEvents
 import io.github.kdroidfilter.seforimapp.core.buildCopyWithSourcePayload
+import io.github.kdroidfilter.seforimapp.core.coroutines.runSuspendCatching
 import io.github.kdroidfilter.seforimapp.core.deeplink.ContentDeepLinkHandler
 import io.github.kdroidfilter.seforimapp.core.presentation.components.AppDockMenu
 import io.github.kdroidfilter.seforimapp.core.presentation.components.AppJumpList
@@ -44,16 +46,20 @@ import io.github.kdroidfilter.seforimapp.core.presentation.utils.detectTouchMode
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.processKeyShortcuts
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.rememberWindowViewModelStoreOwner
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryCheckWindow
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryDegradedLayout
-import io.github.kdroidfilter.seforimapp.features.database.health.reinstallStillHelps
+import io.github.kdroidfilter.seforimapp.features.database.health.asProblem
+import io.github.kdroidfilter.seforimapp.features.database.health.checkLibraryAfterStart
 import io.github.kdroidfilter.seforimapp.features.database.health.requestLibraryReinstall
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
+import io.github.kdroidfilter.seforimapp.features.portable.DriveInUseWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowEvents
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowViewModel
 import io.github.kdroidfilter.seforimapp.features.update.UpdateDialog
+import io.github.kdroidfilter.seforimapp.framework.database.DamagedPart
 import io.github.kdroidfilter.seforimapp.framework.database.DatabaseVersionManager
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryHealth
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
@@ -70,7 +76,12 @@ import io.github.kdroidfilter.seforimapp.framework.database.routeStartup
 import io.github.kdroidfilter.seforimapp.framework.di.AppGraph
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
 import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
+import io.github.kdroidfilter.seforimapp.framework.portable.DriveLock
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
+import io.github.kdroidfilter.seforimapp.framework.portable.keepPortableReportsAnonymous
+import io.github.kdroidfilter.seforimapp.framework.portable.lockIdentifierFor
 import io.github.kdroidfilter.seforimapp.framework.session.SessionManager
+import io.github.kdroidfilter.seforimapp.logger.errorln
 import io.github.kdroidfilter.seforimapp.logger.infoln
 import io.github.kdroidfilter.seforimapp.logger.isDevEnv
 import io.github.kdroidfilter.seforimapp.logger.warnln
@@ -99,10 +110,21 @@ import kotlin.time.Duration.Companion.seconds
 private val AOT_TRAINING_DURATION = 45.seconds
 
 /**
+ * The initial route. Never throws: the check runs in a launched effect, where an exception would
+ * repeat on every launch and take the app down with it, and an unexpected failure is no reason to
+ * offer a 7.5 GB reinstall. The app opens without the library check instead, and the failure is
+ * reported once.
+ */
+private fun computeStartupRoute(): StartupRoute =
+    runSuspendCatching { readStartupRoute() }
+        .onFailure { errorln(it) { "[startup] the library check failed; opening the app without it" } }
+        .getOrElse { StartupRoute.Main(emptyList()) }
+
+/**
  * Determines the initial route synchronously: settings, file sizes, the 100-byte database header,
  * one read-only query and the index metadata. All fast local I/O, well under a second.
  */
-private fun computeStartupRoute(): StartupRoute {
+private fun readStartupRoute(): StartupRoute {
     if (!AppSettings.isOnboardingFinished()) return StartupRoute.Onboarding
     val database = runCatching { Path.of(expectedDatabasePath()) }.getOrNull()
     val health =
@@ -121,13 +143,14 @@ private fun computeStartupRoute(): StartupRoute {
             repeatedAfterReinstall = isRepeatedAfterReinstall(AppSettings.getLastReinstallMarker(), health.problems, modified),
             reinstallRequested = requested,
         )
-    // Written only when it changes.
+    // Written only when it changes: in portable mode every write is a durable save on the drive.
     val marker =
         when (route) {
             is StartupRoute.Update ->
                 if (route.problems.isNotEmpty()) reinstallMarker(route.problems, modified) else AppSettings.getLastReinstallMarker()
-            // Kept while parts are missing, so a reinstall that did not help is recognized.
-            is StartupRoute.Main -> if (route.degraded.isEmpty()) null else AppSettings.getLastReinstallMarker()
+            // A portable library is only known to be fine after it was read back (checkLibraryAfterStart).
+            is StartupRoute.Main ->
+                if (route.degraded.isEmpty() && !PortableEnvironment.isPortable) null else AppSettings.getLastReinstallMarker()
             StartupRoute.Onboarding, is StartupRoute.LibraryError -> AppSettings.getLastReinstallMarker()
         }
     if (marker != AppSettings.getLastReinstallMarker()) AppSettings.setLastReinstallMarker(marker)
@@ -148,6 +171,9 @@ private fun initializeSentry() {
         options.environment = sentryEnvironment
         options.release = NucleusApp.version
         options.isDebug = isDevEnv
+        PortableEnvironment.layout?.let { layout ->
+            keepPortableReportsAnonymous(options, layout.dataDir.toString(), System.getProperty("user.home"))
+        }
     }
     infoln { "Sentry initialized for environment '$sentryEnvironment'." }
 }
@@ -172,6 +198,18 @@ fun main(args: Array<String>) {
 //    DbDeltaRecoveryBootstrap.runOnce()
 
     val appId = "io.github.kdroidfilter.seforimapp"
+    val portableLayout = PortableEnvironment.layout
+    if (portableLayout != null) {
+        // A separate lock, so a portable copy started while an installed Zayit runs opens its own
+        // window instead of handing over to the installed one, which shows the host's data.
+        // Must be set before nucleusApplication acquires the lock.
+        SingleInstanceManager.configuration =
+            SingleInstanceManager.Configuration(lockIdentifier = lockIdentifierFor(appId, portableLayout.dataDir))
+    }
+    val driveLock = portableLayout?.let { DriveLock.acquireForProcess(it.dataDir) }
+    val driveInUse = driveLock is DriveLock.Result.InUse
+    // Before anything reads the settings: this copy only shows a message and leaves the file alone.
+    AppSettingsStore.writesAllowed = !driveInUse
 
     nucleusApplication(
         args,
@@ -179,7 +217,8 @@ fun main(args: Array<String>) {
     ) {
         aotTraining(duration = AOT_TRAINING_DURATION)
 
-        FileKit.init(appId)
+        // Portable: all app data goes to zayit-data on the drive (databasesDir = zayit-data/databases).
+        FileKit.init(appId, filesDir = portableLayout?.filesDir?.toFile(), cacheDir = portableLayout?.cacheDir?.toFile())
 
         val windowState =
             rememberWindowState(
@@ -271,15 +310,18 @@ fun main(args: Array<String>) {
         // Startup routing reads settings, the database header and the index metadata. On a slow
         // or network drive that can take seconds, so it runs off the UI thread while
         // LibraryCheckWindow stands in (hidden unless it takes long). It is null until known.
-        var startupRoute by remember { mutableStateOf<StartupRoute?>(null) }
+        // A copy that found the drive in use only shows DriveInUseWindow and must write nothing.
+        var startupRoute by remember { mutableStateOf<StartupRoute?>(if (driveInUse) StartupRoute.Main(emptyList()) else null) }
         LaunchedEffect(Unit) {
-            startupRoute =
-                withContext(Dispatchers.IO) {
-                    // Retry any database cleanup a previous run could not finish (e.g. a file
-                    // locked by antivirus/Windows Search), before the repository opens the DB.
-                    PendingDbCleanup.runOnce()
-                    computeStartupRoute()
-                }
+            if (startupRoute == null) {
+                startupRoute =
+                    withContext(Dispatchers.IO) {
+                        // Retry any database cleanup a previous run could not finish (e.g. a file
+                        // locked by antivirus/Windows Search), before the repository opens the DB.
+                        PendingDbCleanup.runOnce()
+                        computeStartupRoute()
+                    }
+            }
         }
         val startsWithOnboarding = startupRoute is StartupRoute.Onboarding
         val showOnboardingFromState by mainAppState.showOnBoarding.collectAsState()
@@ -293,6 +335,7 @@ fun main(args: Array<String>) {
         var libraryProblems by remember(startupRoute) { mutableStateOf(startupRoute?.libraryProblems().orEmpty()) }
         val libraryBlockedReason = (startupRoute as? StartupRoute.LibraryError)?.reason
         var degradedProblems by remember(startupRoute) { mutableStateOf((startupRoute as? StartupRoute.Main)?.degraded.orEmpty()) }
+        var damagedParts by remember { mutableStateOf(emptyList<DamagedPart>()) }
         var reinstallHelps by remember { mutableStateOf(true) }
         var reinstallRequested by remember { mutableStateOf(false) }
         val reinstallScope = rememberCoroutineScope()
@@ -323,7 +366,9 @@ fun main(args: Array<String>) {
                 theme = themeDefinition,
                 styling = componentStyling,
             ) {
-                if (startupRoute == null) {
+                if (driveInUse) {
+                    DriveInUseWindow()
+                } else if (startupRoute == null) {
                     LibraryCheckWindow()
                 } else if (showOnboarding) {
                     OnBoardingWindow()
@@ -352,6 +397,7 @@ fun main(args: Array<String>) {
                             settingsWindowViewModel = settingsWindowViewModel,
                             onQuit = {
                                 SessionManager.saveIfEnabled(appGraph)
+                                AppSettingsStore.flushIfPortable()
                                 appGraph.appUpdateService.installPendingOnClose()
                                 exitApplication()
                             },
@@ -430,6 +476,7 @@ fun main(args: Array<String>) {
                             // installPendingOnClose() launches the installer and exits the process
                             // itself when a silent (Win/Mac PATCH) update is ready.
                             SessionManager.saveIfEnabled(appGraph)
+                            AppSettingsStore.flushIfPortable()
                             appGraph.appUpdateService.installPendingOnClose()
                             exitApplication()
                         },
@@ -555,8 +602,16 @@ fun main(args: Array<String>) {
                             LaunchedEffect(Unit) {
                                 appGraph.appUpdateService.checkOnStartup()
                             }
+                            // Portable: read the library back once after an install to catch a drive
+                            // that lost data. Not in the installing session, whose reads hit the cache.
                             LaunchedEffect(Unit) {
-                                reinstallHelps = reinstallStillHelps((startupRoute as? StartupRoute.Main)?.degraded.orEmpty())
+                                val found =
+                                    checkLibraryAfterStart(
+                                        installedThisSession = startupRoute !is StartupRoute.Main,
+                                        degraded = (startupRoute as? StartupRoute.Main)?.degraded.orEmpty(),
+                                    )
+                                damagedParts = found.damaged
+                                reinstallHelps = found.reinstallHelps
                             }
 
                             // Track whether the user is interacting by touch so hover-gated
@@ -666,11 +721,21 @@ fun main(args: Array<String>) {
                                         onReinstall = {
                                             if (!reinstallRequested) {
                                                 reinstallRequested = true
-                                                reinstallScope.launch { requestLibraryReinstall(degradedProblems) }
+                                                val problems = (degradedProblems + damagedParts.map { it.asProblem() }).distinct()
+                                                reinstallScope.launch {
+                                                    // Back to normal if the restart did not happen, so the banner still works.
+                                                    try {
+                                                        requestLibraryReinstall(problems)
+                                                    } finally {
+                                                        reinstallRequested = false
+                                                    }
+                                                }
                                             }
                                         },
                                         reinstallHelps = reinstallHelps,
                                         onDismiss = { degradedProblems = emptyList() },
+                                        damaged = damagedParts,
+                                        onDismissDamage = { damagedParts = emptyList() },
                                     ) { TabsContent() }
                                 }
                             }
@@ -686,5 +751,5 @@ private fun StartupRoute.libraryProblems(): List<LibraryProblem> =
     when (this) {
         is StartupRoute.Update -> problems
         is StartupRoute.LibraryError -> problems
-        else -> emptyList()
+        is StartupRoute.Main, StartupRoute.Onboarding -> emptyList()
     }

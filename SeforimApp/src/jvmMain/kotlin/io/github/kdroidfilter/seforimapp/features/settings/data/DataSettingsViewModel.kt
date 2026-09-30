@@ -5,13 +5,15 @@ import androidx.lifecycle.viewModelScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metrox.viewmodel.ViewModelKey
-import io.github.kdroidfilter.platformtools.appmanager.restartApplication
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.framework.database.getUserSettingsDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.isSqliteDatabase
 import io.github.kdroidfilter.seforimapp.framework.database.pendingUserSettingsImportFile
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
 import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
+import io.github.kdroidfilter.seforimapp.framework.platform.restartApp
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
+import io.github.kdroidfilter.seforimapp.framework.portable.deleteTree
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
 import io.github.vinceglb.filekit.path
@@ -91,7 +93,7 @@ class DataSettingsViewModel : ViewModel() {
                 }
 
                 _state.update { it.copy(isImporting = false, importSucceeded = true) }
-                restartApplication()
+                restartApp()
             } catch (e: Exception) {
                 _state.update { it.copy(isImporting = false, importFailed = true) }
             }
@@ -113,12 +115,10 @@ class DataSettingsViewModel : ViewModel() {
 
             // Delete every file/directory in the managed databases directory (this also holds the
             // user settings DB with notes and highlights).
-            if (dbDir.exists()) {
-                dbDir.listFiles()?.forEach { file ->
-                    runCatching {
-                        if (file.isDirectory) file.deleteRecursively() else file.delete()
-                    }
-                }
+            // Links are removed, never followed (see deleteTree), and in portable mode nothing is
+            // deleted when the folder itself leads off the drive.
+            if (dbDir.exists() && PortableEnvironment.mayCleanUp(dbDir.toPath())) {
+                dbDir.listFiles()?.forEach { file -> deleteTree(file.toPath()) }
             }
 
             // Also clean a custom DB location, if the user pointed the books DB elsewhere.
@@ -135,15 +135,13 @@ class DataSettingsViewModel : ViewModel() {
                         "release_info.txt",
                     ).forEach { name ->
                         val f = File(customBaseDir, name)
-                        if (f.exists()) {
-                            runCatching { if (f.isDirectory) f.deleteRecursively() else f.delete() }
-                        }
+                        deleteTree(f.toPath())
                     }
                 }
             }
 
             _state.update { it.copy(resetDone = true) }
-            restartApplication()
+            restartApp()
         }
     }
 }

@@ -18,6 +18,7 @@ import io.github.kdroidfilter.seforimapp.features.onboarding.download.DownloadSc
 import io.github.kdroidfilter.seforimapp.features.onboarding.extract.ExtractScreen
 import io.github.kdroidfilter.seforimapp.features.onboarding.finish.FinishScreen
 import io.github.kdroidfilter.seforimapp.features.onboarding.init.InitScreen
+import io.github.kdroidfilter.seforimapp.features.onboarding.installlocation.InstallLocationScreen
 import io.github.kdroidfilter.seforimapp.features.onboarding.licence.LicenceScreen
 import io.github.kdroidfilter.seforimapp.features.onboarding.offline.OfflineFileSelectionScreen
 import io.github.kdroidfilter.seforimapp.features.onboarding.region.RegionConfigScreen
@@ -26,7 +27,10 @@ import io.github.kdroidfilter.seforimapp.features.onboarding.userprofile.UserPro
 import io.github.kdroidfilter.seforimapp.features.onboarding.version.VersionVerificationScreen
 
 @Composable
-fun OnBoardingNavHost(navController: NavHostController) {
+fun OnBoardingNavHost(
+    navController: NavHostController,
+    onExitApplication: () -> Unit,
+) {
     Column(modifier = Modifier.fillMaxSize()) {
         val progressBarState = ProgressBarState
         val progress by progressBarState.progress.collectAsState()
@@ -41,6 +45,9 @@ fun OnBoardingNavHost(navController: NavHostController) {
             }
             noAnimatedComposable<OnBoardingDestination.LicenceScreen> {
                 LicenceScreen(navController)
+            }
+            noAnimatedComposable<OnBoardingDestination.InstallLocationScreen> {
+                InstallLocationScreen(navController, onExitApplication)
             }
             noAnimatedComposable<OnBoardingDestination.AvailableDiskSpaceScreen> {
                 AvailableDiskSpaceScreen(navController)

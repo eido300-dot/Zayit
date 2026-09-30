@@ -29,6 +29,19 @@ class AtomicFilesTest {
     }
 
     @Test
+    fun `a link left at the temp name is replaced, not written through`() {
+        val elsewhere = File(dir, "elsewhere.txt").apply { writeText("not ours") }
+        val target = File(dir, "session.pb")
+        Files.createSymbolicLink(File(dir, "session.pb.tmp").toPath(), elsewhere.toPath())
+
+        target.writeAtomically { it.write("new".toByteArray()) }
+
+        assertEquals("not ours", elsewhere.readText())
+        assertEquals("new", target.readText())
+        assertFalse(Files.isSymbolicLink(target.toPath()))
+    }
+
+    @Test
     fun `failed write keeps previous content`() {
         val target = File(dir, "seforim.db")
         target.writeText("complete")
@@ -52,5 +65,15 @@ class AtomicFilesTest {
 
         assertFalse(target.exists())
         assertEquals(0, dir.list()!!.size)
+    }
+
+    @Test
+    fun `chunked sync runs once per whole chunk written`() {
+        var syncs = 0
+        val chunks = ChunkedSync(chunkBytes = 10) { syncs++ }
+
+        repeat(7) { chunks.wrote(4) }
+
+        assertEquals(2, syncs)
     }
 }
