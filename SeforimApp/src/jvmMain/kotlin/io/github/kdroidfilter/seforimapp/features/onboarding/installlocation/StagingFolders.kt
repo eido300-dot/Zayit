@@ -1,0 +1,100 @@
+package io.github.kdroidfilter.seforimapp.features.onboarding.installlocation
+
+import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_DATA_DIR_NAME
+import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_MARKER_NAME
+import io.github.kdroidfilter.seforimapp.framework.portable.RetryPolicy
+import io.github.kdroidfilter.seforimapp.framework.portable.deleteTree
+import io.github.kdroidfilter.seforimapp.framework.portable.moveWithRetry
+import io.github.kdroidfilter.seforimapp.framework.portable.syncDirectory
+import io.github.kdroidfilter.seforimapp.framework.portable.writeDurably
+import io.github.kdroidfilter.seforimapp.logger.errorln
+import io.github.kdroidfilter.seforimapp.logger.warnln
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.LinkOption.NOFOLLOW_LINKS
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+
+/** The data folder and its marker, which is what makes the copy start in portable mode. */
+internal fun createDataFolder(staging: Path) {
+    val dataDir = staging.resolve(PORTABLE_DATA_DIR_NAME)
+    Files.createDirectory(dataDir)
+    writeDurably(dataDir.resolve(PORTABLE_MARKER_NAME), ByteArray(0))
+    syncDirectory(dataDir)
+    syncDirectory(staging)
+}
+
+/**
+ * `Zayit` → `Zayit.old`, its data folder → the new program, new program → `Zayit`. A failed step
+ * undoes the earlier ones, so the data always stays with a complete program.
+ */
+internal fun swapProgram(
+    plan: InstallPlan,
+    move: (Path, Path) -> Unit,
+) {
+    val oldData = plan.previous.resolve(PORTABLE_DATA_DIR_NAME)
+    val newData = plan.staging.resolve(PORTABLE_DATA_DIR_NAME)
+    move(plan.destination, plan.previous)
+    try {
+        move(oldData, newData)
+    } catch (e: IOException) {
+        undo(e) { move(plan.previous, plan.destination) }
+        throw e
+    }
+    try {
+        move(plan.staging, plan.destination)
+    } catch (e: IOException) {
+        undo(e) {
+            move(newData, oldData)
+            move(plan.previous, plan.destination)
+        }
+        throw e
+    }
+    syncDirectory(plan.destination.parent)
+}
+
+/** A rename in one step, retried while a scanner holds the fresh copy (see [RetryPolicy.INSTALL]). */
+internal fun moveForInstall(
+    from: Path,
+    to: Path,
+) = moveWithRetry(from, to, ATOMIC_MOVE, policy = RetryPolicy.INSTALL)
+
+private inline fun undo(
+    failure: IOException,
+    steps: () -> Unit,
+) {
+    try {
+        steps()
+    } catch (e: IOException) {
+        failure.addSuppressed(e)
+        errorln(e) { "[portable-install] could not undo a failed update; the previous program is in Zayit.old" }
+    }
+}
+
+/**
+ * Deletes a staging folder. With [protectData], one that holds a data folder is kept: outside a
+ * fresh copy that happens only when undoing a failed update failed too, and then the user's
+ * notes are in it.
+ */
+internal fun discardStaging(
+    staging: Path,
+    protectData: Boolean = true,
+) {
+    if (protectData && Files.exists(staging.resolve(PORTABLE_DATA_DIR_NAME), NOFOLLOW_LINKS)) {
+        errorln { "[portable-install] keeping $STAGING_SUFFIX folder: it holds the data of a portable copy" }
+        return
+    }
+    if (!deleteTree(staging)) warnln { "[portable-install] an interrupted copy could not be fully removed" }
+}
+
+/**
+ * Removes what an interrupted copy left, before a new one starts. A leftover that still holds a
+ * user's data folder (see [discardStaging]) stops the copy instead, before anything is written.
+ */
+internal fun clearStaging(staging: Path) {
+    discardStaging(staging)
+    if (Files.exists(staging, NOFOLLOW_LINKS)) throw PortableInstallException(FailureReason.UpdateLeftover)
+}
+
+internal fun isPortableCopy(folder: Path): Boolean =
+    Files.isRegularFile(folder.resolve(PORTABLE_DATA_DIR_NAME).resolve(PORTABLE_MARKER_NAME), NOFOLLOW_LINKS)

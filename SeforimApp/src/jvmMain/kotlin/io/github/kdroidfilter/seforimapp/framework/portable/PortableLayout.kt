@@ -47,6 +47,9 @@ internal fun appBundleOf(executable: Path): Path? {
     return if (isBundleLayout) bundle else null
 }
 
+/** What a copy to a drive takes along: the `.app` bundle on macOS, the program folder elsewhere. */
+internal fun programRootOf(executable: Path): Path? = appBundleOf(executable) ?: executable.parent
+
 /** The folder that holds the program and, in portable mode, its [PORTABLE_DATA_DIR_NAME] sibling. */
 internal fun containerOf(executable: Path): Path? = appBundleOf(executable)?.parent ?: executable.parent
 
