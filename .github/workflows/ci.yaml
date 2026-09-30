@@ -23,10 +23,11 @@ jobs:
         uses: kdroidFilter/Nucleus/.github/actions/setup-nucleus@789704a9b63c5b2a0ff4d6e1cd85711ab2e4286b
 
       - name: Run ktlint
-        run: ./gradlew ktlintCheck --no-daemon
+        run: ./gradlew ktlintCheck --continue --no-daemon
 
       - name: Run detekt
-        run: ./gradlew detekt --no-daemon
+        if: always()
+        run: ./gradlew detekt --continue --no-daemon
 
   test:
     runs-on: ${{ matrix.os }}
