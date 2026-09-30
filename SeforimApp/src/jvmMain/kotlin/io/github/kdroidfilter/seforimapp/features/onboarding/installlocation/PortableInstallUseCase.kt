@@ -33,7 +33,7 @@ import java.nio.file.Path
  */
 class PortableInstallUseCase(
     private val executable: () -> Path? = ::currentExecutablePath,
-    private val copyFile: (Path, Path) -> Unit = ::copyFileDurably,
+    private val copyFile: (from: Path, to: Path, onCopied: (bytes: Long) -> Unit) -> Unit = ::copyFileDurably,
     private val canWrite: (Path) -> Boolean = ::probeWritable,
     private val isExecutable: (Path) -> Boolean = Files::isExecutable,
     private val move: (Path, Path) -> Unit = ::moveForInstall,
@@ -64,13 +64,13 @@ class PortableInstallUseCase(
 
     /**
      * Creates a new portable copy in [targetParent] and returns its folder. [onProgress] gets the
-     * number of copied entries and the total, on the IO thread.
+     * work done and the total (see [copyProgramEntries]), on the IO thread.
      *
      * @throws PortableInstallException when the copy did not complete; nothing is left behind.
      */
     suspend fun install(
         targetParent: Path,
-        onProgress: (copied: Int, total: Int) -> Unit,
+        onProgress: (copied: Long, total: Long) -> Unit,
     ): String =
         mutex.withLock {
             withContext(ioDispatcher) {
@@ -106,7 +106,7 @@ class PortableInstallUseCase(
      */
     suspend fun updateProgram(
         targetParent: Path,
-        onProgress: (copied: Int, total: Int) -> Unit,
+        onProgress: (copied: Long, total: Long) -> Unit,
     ): String =
         mutex.withLock {
             withContext(ioDispatcher) {
@@ -195,7 +195,7 @@ class PortableInstallUseCase(
     /** Copies the program into a fresh staging folder and checks that it can run from there. */
     private suspend fun stageProgram(
         plan: InstallPlan,
-        onProgress: (copied: Int, total: Int) -> Unit,
+        onProgress: (copied: Long, total: Long) -> Unit,
     ) {
         val context = currentCoroutineContext()
         Files.createDirectories(plan.copyRoot)

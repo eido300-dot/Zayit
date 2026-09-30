@@ -12,9 +12,17 @@ import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
+import java.nio.file.StandardOpenOption.CREATE_NEW
 import java.nio.file.StandardOpenOption.READ
+import java.nio.file.StandardOpenOption.WRITE
 import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileAttribute
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermissions
 import kotlin.coroutines.CoroutineContext
+
+/** How much of a file is copied between two checks for cancellation and two progress reports. */
+private const val COPY_CHUNK_BYTES = 8L * 1024 * 1024
 
 /**
  * Lists what a copy of the program folder [source] takes along, parents before children. Links
@@ -47,7 +55,7 @@ internal fun listProgramEntries(source: Path): List<ProgramEntry> {
                 when {
                     isTopLevelUninstaller -> Unit
                     attrs.isSymbolicLink -> entries += ProgramEntry(relative, ProgramEntry.Kind.Link)
-                    attrs.isRegularFile -> entries += ProgramEntry(relative, ProgramEntry.Kind.File)
+                    attrs.isRegularFile -> entries += ProgramEntry(relative, ProgramEntry.Kind.File, attrs.size())
                     else -> throw PortableInstallException(FailureReason.CopyFailed, IOException("unsupported entry: $relative"))
                 }
                 return FileVisitResult.CONTINUE
@@ -57,17 +65,24 @@ internal fun listProgramEntries(source: Path): List<ProgramEntry> {
     return entries
 }
 
-/** One entry of the program folder, relative to it, in the order it must be created. */
+/**
+ * One entry of the program folder, relative to it, in the order it must be created.
+ *
+ * @property size the bytes to copy: the file's size when listed, 0 for folders and links.
+ */
 internal data class ProgramEntry(
     val relative: Path,
     val kind: Kind,
+    val size: Long = 0,
 ) {
     enum class Kind { Directory, File, Link }
 }
 
 /**
  * Copies [entries] from [source] into [target], which must exist, checking [context] for
- * cancellation between entries and reporting each finished one to [onProgress].
+ * cancellation between entries and between the chunks of a file (the program is mostly one large
+ * native binary). [onProgress] gets the work done and the total: the bytes, plus one for each
+ * entry so that folders and empty files count too.
  */
 @Throws(IOException::class)
 internal fun copyProgramEntries(
@@ -75,19 +90,26 @@ internal fun copyProgramEntries(
     source: Path,
     target: Path,
     context: CoroutineContext,
-    copyFile: (Path, Path) -> Unit,
-    onProgress: (copied: Int, total: Int) -> Unit,
+    copyFile: (from: Path, to: Path, onCopied: (bytes: Long) -> Unit) -> Unit,
+    onProgress: (copied: Long, total: Long) -> Unit,
 ) {
-    entries.forEachIndexed { index, entry ->
+    val total = entries.sumOf { it.size + 1 }
+    var copied = 0L
+    val onCopied = { bytes: Long ->
+        context.ensureActive()
+        copied += bytes
+        onProgress(copied, total)
+    }
+    entries.forEach { entry ->
         context.ensureActive()
         val from = source.resolve(entry.relative.toString())
         val to = target.resolve(entry.relative.toString())
         when (entry.kind) {
             ProgramEntry.Kind.Directory -> Files.createDirectory(to)
-            ProgramEntry.Kind.File -> copyFile(from, to)
+            ProgramEntry.Kind.File -> copyFile(from, to, onCopied)
             ProgramEntry.Kind.Link -> copyLink(from, to)
         }
-        onProgress(index + 1, entries.size)
+        onCopied(1)
     }
 }
 
@@ -104,16 +126,40 @@ private fun copyLink(
 }
 
 /**
- * Copies one file and flushes it to the device. File attributes are not copied: the new file gets
- * the source's permission bits (so the program stays executable) but no timestamps, owner or
- * macOS quarantine flag.
+ * Copies one file in chunks, reporting each to [onCopied] (which may throw to stop the copy), then
+ * flushes it to the device. File attributes are not copied: the new file gets the source's
+ * permission bits (so the program stays executable) but no timestamps, owner or macOS quarantine
+ * flag, as with `Files.copy` without `COPY_ATTRIBUTES`.
  */
 @Throws(IOException::class)
 internal fun copyFileDurably(
     from: Path,
     to: Path,
+    onCopied: (bytes: Long) -> Unit,
 ) {
-    Files.copy(from, to, NOFOLLOW_LINKS)
+    FileChannel.open(from, READ, NOFOLLOW_LINKS).use { input ->
+        FileChannel.open(to, setOf(CREATE_NEW, WRITE), *permissionsOf(from)).use { output ->
+            val size = input.size()
+            var position = 0L
+            while (position < size) {
+                val copied = input.transferTo(position, minOf(COPY_CHUNK_BYTES, size - position), output)
+                if (copied <= 0) throw IOException("$from got shorter while it was copied")
+                position += copied
+                onCopied(copied)
+            }
+        }
+    }
+    flushToDevice(to)
+}
+
+/** The permission bits of [file] as a creation attribute, where the file system has them (not Windows). */
+private fun permissionsOf(file: Path): Array<FileAttribute<*>> {
+    val view = Files.getFileAttributeView(file, PosixFileAttributeView::class.java, NOFOLLOW_LINKS) ?: return emptyArray()
+    return arrayOf(PosixFilePermissions.asFileAttribute(view.readAttributes().permissions()))
+}
+
+@Throws(IOException::class)
+private fun flushToDevice(to: Path) {
     try {
         RandomAccessFile(to.toFile(), "rw").use { forceToDisk(it) }
     } catch (_: FileNotFoundException) {

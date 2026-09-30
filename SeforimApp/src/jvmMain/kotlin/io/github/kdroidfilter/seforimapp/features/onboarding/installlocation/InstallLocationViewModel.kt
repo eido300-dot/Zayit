@@ -9,6 +9,8 @@ import io.github.kdroidfilter.seforimapp.framework.di.AppScope
 import io.github.kdroidfilter.seforimapp.logger.warnln
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,12 +45,14 @@ class InstallLocationViewModel(
 
     private fun checkedFolder(): String? = (_state.value as? InstallLocationState.Checked)?.folder
 
-    private fun checkFolder(folder: String) =
+    private fun checkFolder(folder: String) {
+        // Shown at once: a copy cancelled just before may take a moment to clean up first.
+        _state.value = InstallLocationState.Checking(folder)
         launchReplacing {
-            _state.value = InstallLocationState.Checking(folder)
             val path = pathOf(folder)
             _state.value = InstallLocationState.Checked(folder, if (path == null) TargetCheck.Unavailable else useCase.check(path))
         }
+    }
 
     private fun discardStaleAndRecheck(folder: String) =
         launchReplacing {
@@ -64,12 +68,12 @@ class InstallLocationViewModel(
     ) = launchReplacing {
         val path = pathOf(folder) ?: return@launchReplacing
         _state.value = InstallLocationState.Copying(folder, percent = 0, isUpdate = isUpdate)
-        val onProgress = { copied: Int, total: Int ->
+        val onProgress = { copied: Long, total: Long ->
             _state.update { current ->
                 if (current is InstallLocationState.Copying) current.copy(percent = percentOf(copied, total)) else current
             }
         }
-        _state.value =
+        val outcome =
             try {
                 val finalDir = if (isUpdate) useCase.updateProgram(path, onProgress) else useCase.install(path, onProgress)
                 InstallLocationState.Done(finalDir, isUpdate)
@@ -80,6 +84,10 @@ class InstallLocationViewModel(
                 warnln(e) { "[portable-install] copy to the drive failed" }
                 InstallLocationState.Failed(folder, FailureReason.CopyFailed)
             }
+        // A copy cancelled meanwhile (the user went back or picked another folder) can still fail
+        // while it cleans up; the screen has moved on, so its failure is not shown.
+        currentCoroutineContext().ensureActive()
+        _state.value = outcome
     }
 
     private fun reset() {

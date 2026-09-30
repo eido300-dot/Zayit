@@ -35,8 +35,8 @@ sealed interface InstallLocationState {
 
 /** Share of [copied] out of [total], 0 to 100; an empty program counts as done. */
 internal fun percentOf(
-    copied: Int,
-    total: Int,
-): Int = if (total <= 0) FULL_PERCENT else (copied.toLong() * FULL_PERCENT / total).toInt().coerceIn(0, FULL_PERCENT)
+    copied: Long,
+    total: Long,
+): Int = if (total <= 0) FULL_PERCENT else (copied.coerceIn(0, total) * FULL_PERCENT / total).toInt()
 
 internal const val FULL_PERCENT = 100

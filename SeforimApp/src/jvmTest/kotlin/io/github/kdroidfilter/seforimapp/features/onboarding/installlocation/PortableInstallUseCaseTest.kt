@@ -5,6 +5,7 @@ import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_DATA_DIR_NA
 import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_MARKER_NAME
 import io.github.kdroidfilter.seforimapp.framework.portable.resolvePortableLayout
 import io.github.kdroidfilter.seforimapp.framework.portable.treeSize
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -30,6 +31,9 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+/** More than two copy chunks, so a copy reports and can stop inside the file. */
+private const val LARGE_FILE_BYTES = 20 * 1024 * 1024
+
 class PortableInstallUseCaseTest {
     private val root: Path = createTempDirectory("zayit-portable-install")
     private val programDir: Path = root.resolve("host/Programs/zayit")
@@ -53,7 +57,7 @@ class PortableInstallUseCaseTest {
 
     private fun useCase(
         exe: Path? = executable,
-        copyFile: (Path, Path) -> Unit = ::copyFileDurably,
+        copyFile: (Path, Path, (Long) -> Unit) -> Unit = ::copyFileDurably,
         canWrite: (Path) -> Boolean = { true },
         isExecutable: (Path) -> Boolean = { Files.isRegularFile(it) },
         move: (Path, Path) -> Unit = ::moveForInstall,
@@ -126,12 +130,13 @@ class PortableInstallUseCaseTest {
     fun `progress reaches the total`() =
         runBlocking {
             createProgram()
-            var last = 0 to 0
+            var last = 0L to 0L
 
             useCase().install(drive) { copied, total -> last = copied to total }
 
-            // lib/, zayit.exe and three libraries; the uninstaller is left out.
-            assertEquals(5 to 5, last)
+            // 6 bytes (zayit.exe and three libraries) plus one per entry (lib/ and the four files);
+            // the uninstaller is left out.
+            assertEquals(11L to 11L, last)
         }
 
     @Test
@@ -183,8 +188,8 @@ class PortableInstallUseCaseTest {
             createProgram()
             val started = CountDownLatch(1)
             val release = CountDownLatch(1)
-            val blocking: (Path, Path) -> Unit = { from, to ->
-                copyFileDurably(from, to)
+            val blocking: (Path, Path, (Long) -> Unit) -> Unit = { from, to, onCopied ->
+                copyFileDurably(from, to, onCopied)
                 if (from.fileName.toString() == "b.bin") {
                     started.countDown()
                     release.await(10, TimeUnit.SECONDS)
@@ -201,12 +206,54 @@ class PortableInstallUseCaseTest {
         }
 
     @Test
+    fun `a large file is copied in chunks, each reported, so a copy can stop inside it`() {
+        val from = Files.write(root.resolve("large.bin"), ByteArray(LARGE_FILE_BYTES) { it.toByte() })
+        val to = root.resolve("large-copy.bin")
+        val chunks = mutableListOf<Long>()
+
+        copyFileDurably(from, to) { chunks += it }
+
+        assertTrue(chunks.size >= 3, chunks.toString())
+        assertEquals(LARGE_FILE_BYTES.toLong(), chunks.sum())
+        assertTrue(Files.readAllBytes(from).contentEquals(Files.readAllBytes(to)))
+    }
+
+    @Test
+    fun `a copy stops at the first chunk whose report throws`() {
+        val from = Files.write(root.resolve("large.bin"), ByteArray(LARGE_FILE_BYTES))
+        var reports = 0
+
+        assertFailsWith<CancellationException> {
+            copyFileDurably(from, root.resolve("large-copy.bin")) {
+                reports++
+                throw CancellationException("cancelled")
+            }
+        }
+
+        assertEquals(1, reports)
+    }
+
+    @Test
+    fun `a read-only file is copied and keeps its permission bits`() {
+        if ("posix" !in FileSystems.getDefault().supportedFileAttributeViews()) return
+        val from = root.resolve("readonly.bin")
+        from.writeText("r")
+        Files.setPosixFilePermissions(from, PosixFilePermissions.fromString("r--r--r--"))
+        val to = root.resolve("readonly-copy.bin")
+
+        copyFileDurably(from, to) { }
+
+        assertEquals("r", to.readText())
+        assertEquals(PosixFilePermissions.fromString("r--r--r--"), Files.getPosixFilePermissions(to))
+    }
+
+    @Test
     fun `a file that fails to copy fails the whole copy and leaves nothing behind`() =
         runBlocking {
             createProgram()
-            val failing: (Path, Path) -> Unit = { from, to ->
+            val failing: (Path, Path, (Long) -> Unit) -> Unit = { from, to, onCopied ->
                 if (from.fileName.toString() == "b.bin") throw IOException("device error")
-                copyFileDurably(from, to)
+                copyFileDurably(from, to, onCopied)
             }
 
             val failure = assertFailsWith<PortableInstallException> { useCase(copyFile = failing).install(drive) { _, _ -> } }
@@ -219,7 +266,7 @@ class PortableInstallUseCaseTest {
     fun `an unexpected error still leaves nothing behind`() =
         runBlocking {
             createProgram()
-            val failing: (Path, Path) -> Unit = { _, _ -> throw IllegalStateException("bug") }
+            val failing: (Path, Path, (Long) -> Unit) -> Unit = { _, _, _ -> throw IllegalStateException("bug") }
 
             assertFailsWith<IllegalStateException> { useCase(copyFile = failing).install(drive) { _, _ -> } }
 

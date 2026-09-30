@@ -23,8 +23,9 @@ class InstallLocationStateTest {
 
     @Test
     fun `large programs do not overflow the percent`() {
-        assertEquals(50, percentOf(Int.MAX_VALUE / 2, Int.MAX_VALUE - 1))
-        assertEquals(100, percentOf(Int.MAX_VALUE, Int.MAX_VALUE))
+        val program = 400L * 1024 * 1024 * 1024
+        assertEquals(50, percentOf(program / 2, program))
+        assertEquals(100, percentOf(program, program))
     }
 
     @Test

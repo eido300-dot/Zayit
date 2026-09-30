@@ -69,7 +69,7 @@ class InstallLocationViewModelTest {
         runTest(dispatcher) {
             val release = CompletableDeferred<Unit>()
             coEvery { useCase.install(path, any()) } coAnswers {
-                secondArg<(Int, Int) -> Unit>().invoke(1, 4)
+                secondArg<(Long, Long) -> Unit>().invoke(1, 4)
                 release.await()
                 finalDir
             }
@@ -161,6 +161,49 @@ class InstallLocationViewModelTest {
 
             assertEquals(listOf("copy cleaned up", "other checked"), log)
             assertEquals(InstallLocationState.Checked(other, TargetCheck.NotWritable), viewModel.state.value)
+        }
+
+    @Test
+    fun `a folder picked right after cancelling shows as being checked while the copy cleans up`() =
+        runTest(dispatcher) {
+            val cleanup = CompletableDeferred<Unit>()
+            coEvery { useCase.install(path, any()) } coAnswers {
+                try {
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) { cleanup.await() }
+                }
+            }
+            val other = "/media/other"
+            coEvery { useCase.check(Path.of(other)) } returns TargetCheck.NotWritable
+            val viewModel = checkedViewModel()
+            viewModel.onEvent(InstallLocationEvents.StartCopy)
+            viewModel.onEvent(InstallLocationEvents.ChooseAgain)
+
+            viewModel.onEvent(InstallLocationEvents.FolderPicked(other))
+            assertEquals(InstallLocationState.Checking(other), viewModel.state.value)
+
+            cleanup.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(InstallLocationState.Checked(other, TargetCheck.NotWritable), viewModel.state.value)
+        }
+
+    @Test
+    fun `a cancelled copy that then fails does not replace what the screen shows now`() =
+        runTest(dispatcher) {
+            val cleanup = CompletableDeferred<Unit>()
+            coEvery { useCase.install(path, any()) } coAnswers {
+                withContext(NonCancellable) { cleanup.await() }
+                throw IOException("the drive was removed")
+            }
+            val viewModel = checkedViewModel()
+            viewModel.onEvent(InstallLocationEvents.StartCopy)
+            viewModel.onEvent(InstallLocationEvents.ChooseAgain)
+
+            cleanup.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(InstallLocationState.Choose, viewModel.state.value)
         }
 
     @Test
