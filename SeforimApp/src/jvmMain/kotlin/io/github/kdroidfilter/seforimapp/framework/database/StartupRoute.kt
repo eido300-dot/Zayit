@@ -4,9 +4,13 @@ package io.github.kdroidfilter.seforimapp.framework.database
 sealed interface StartupRoute {
     data object Onboarding : StartupRoute
 
-    /** The main window; [degraded] lists missing optional parts to warn about. */
+    /**
+     * The main window. Missing optional parts are found once it is up, and shown in its banner.
+     * [libraryChecked] is false when the startup check failed or could not look at the book table, and
+     * the app opened without it, or when this stands in for a copy that found the drive in use.
+     */
     data class Main(
-        val degraded: List<LibraryProblem>,
+        val libraryChecked: Boolean,
     ) : StartupRoute
 
     /** The database update window: a reinstall when [problems] is not empty, a version update otherwise. */
@@ -59,7 +63,7 @@ internal fun routeStartup(
         }
     }
     if (!versionCompatible) return StartupRoute.Update(emptyList())
-    return StartupRoute.Main(health.degraded)
+    return StartupRoute.Main(libraryChecked = health.conclusive)
 }
 
 /**
@@ -77,6 +81,20 @@ internal fun encodeProblems(problems: List<LibraryProblem>): String = problems.j
 /** The problems in [text]; unknown names (from another version) are dropped. */
 internal fun decodeProblems(text: String): List<LibraryProblem> =
     text.split(',').mapNotNull { name -> LibraryProblem.entries.firstOrNull { it.name == name.trim() } }
+
+/**
+ * Whether the record of the last reinstall can be dropped: every check ran ([libraryChecked]) and
+ * found nothing wrong, on a launch after the one that installed, whose next launch must still
+ * recognize the same problems coming back. On a drive, only once the library was read back intact
+ * ([readBackIntact]).
+ */
+internal fun canForgetReinstall(
+    problems: List<LibraryProblem>,
+    libraryChecked: Boolean,
+    installedThisSession: Boolean,
+    isPortable: Boolean,
+    readBackIntact: Boolean,
+): Boolean = libraryChecked && problems.isEmpty() && !installedThisSession && (readBackIntact || !isPortable)
 
 internal fun isRepeatedAfterReinstall(
     marker: String?,

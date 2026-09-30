@@ -37,15 +37,18 @@ enum class LibraryProblem(
     DictionaryMissing(Severity.Degraded),
 }
 
-/** The result of [checkLibraryHealth]. */
+/**
+ * The result of [checkLibraryHealth] or [checkRequiredParts]. [conclusive] is false when the book table
+ * could not be looked at ([BookTableState.Inconclusive]): no problem is reported, but none is ruled out.
+ */
 data class LibraryHealth(
     val problems: List<LibraryProblem>,
+    val conclusive: Boolean = true,
 ) {
+    /** No problem was found; see [conclusive] for whether any was ruled out. */
     val isHealthy: Boolean get() = problems.isEmpty()
 
     val needsReinstall: Boolean get() = problems.any { it.severity == Severity.Reinstall }
-
-    val degraded: List<LibraryProblem> get() = problems.filter { it.severity == Severity.Degraded }
 }
 
 /** The fields of the 100-byte SQLite header the check needs. [pageCount] is null when the header does not vouch for it. */
@@ -61,7 +64,10 @@ data class SqliteHeader(
  */
 enum class BookTableState { HasBooks, NoBooks, NoTable, Unreadable, Inconclusive }
 
-/** File system and database reads behind [checkLibraryHealth], replaceable in tests. None of them writes anything. */
+/**
+ * File system and database reads behind [checkRequiredParts] and [checkOptionalParts], replaceable
+ * in tests. None of them writes anything.
+ */
 interface LibraryProbe {
     /** Size of the regular file at [path], or null when there is none. */
     fun size(path: Path): Long?
@@ -83,39 +89,64 @@ interface LibraryProbe {
  * crash in the main window. There is no `integrity_check`, which takes minutes on 7.5 GB.
  *
  * Never throws what a probe can be expected to hit: a failure that is not a damaged file (a missing
- * native library, a drive that stops answering) is logged and counts as no problem. [dictionaryOverridden] is true when a dictionary is configured elsewhere
- * (`-DmagicDict`, `SEFORIM_MAGIC_DICT`), so a missing `lexical.db` is not reported.
+ * native library, a drive that stops answering) is logged and counts as no problem; when that was the
+ * look at the book table, the result is not [LibraryHealth.conclusive]. [dictionaryOverridden] is
+ * true when a dictionary is configured elsewhere (`-DmagicDict`, `SEFORIM_MAGIC_DICT`), so a missing
+ * `lexical.db` is not reported.
  */
 internal fun checkLibraryHealth(
     files: LibraryFiles,
     probe: LibraryProbe = RealLibraryProbe,
     dictionaryOverridden: Boolean = isDictionaryOverridden(),
 ): LibraryHealth {
-    val problems = mutableListOf<LibraryProblem>()
-    databaseProblem(files.database, probe)?.let(problems::add)
-    if (probe.size(files.catalog) == null) problems += LibraryProblem.CatalogMissing
-    if (!probe.luceneIndexComplete(files.textIndex)) problems += LibraryProblem.TextIndexMissing
-    if (!probe.luceneIndexComplete(files.lookupIndex)) problems += LibraryProblem.LookupIndexMissing
-    if (!dictionaryOverridden && !probe.dictionaryValid(files.dictionary)) problems += LibraryProblem.DictionaryMissing
-    return LibraryHealth(problems)
+    val required = checkRequiredParts(files, probe)
+    return required.copy(problems = required.problems + checkOptionalParts(files, probe, dictionaryOverridden))
 }
 
-private fun databaseProblem(
+/**
+ * The part of [checkLibraryHealth] the app cannot open without: the database and the catalog. This
+ * is the check before the first window; the indexes and the dictionary only degrade the app, so they
+ * are left to [checkOptionalParts] once the window is up, and the window does not wait for them.
+ */
+internal fun checkRequiredParts(
+    files: LibraryFiles,
+    probe: LibraryProbe = RealLibraryProbe,
+): LibraryHealth {
+    val database = checkDatabase(files.database, probe)
+    val catalogMissing = LibraryProblem.CatalogMissing.takeIf { probe.size(files.catalog) == null }
+    return database.copy(problems = database.problems + listOfNotNull(catalogMissing))
+}
+
+/** The part of [checkLibraryHealth] whose problems only degrade the app: the search indexes and the dictionary. */
+internal fun checkOptionalParts(
+    files: LibraryFiles,
+    probe: LibraryProbe = RealLibraryProbe,
+    dictionaryOverridden: Boolean = isDictionaryOverridden(),
+): List<LibraryProblem> =
+    buildList {
+        if (!probe.luceneIndexComplete(files.textIndex)) add(LibraryProblem.TextIndexMissing)
+        if (!probe.luceneIndexComplete(files.lookupIndex)) add(LibraryProblem.LookupIndexMissing)
+        if (!dictionaryOverridden && !probe.dictionaryValid(files.dictionary)) add(LibraryProblem.DictionaryMissing)
+    }
+
+private fun checkDatabase(
     database: Path,
     probe: LibraryProbe,
-): LibraryProblem? {
-    val size = probe.size(database) ?: return LibraryProblem.DatabaseMissing
-    if (size == 0L) return LibraryProblem.DatabaseEmpty
-    val header = probe.header(database) ?: return LibraryProblem.DatabaseNotSqlite
+): LibraryHealth {
+    val size = probe.size(database) ?: return healthWith(LibraryProblem.DatabaseMissing)
+    if (size == 0L) return healthWith(LibraryProblem.DatabaseEmpty)
+    val header = probe.header(database) ?: return healthWith(LibraryProblem.DatabaseNotSqlite)
     val pageCount = header.pageCount
-    if (pageCount != null && size < pageCount * header.pageSize) return LibraryProblem.DatabaseTruncated
+    if (pageCount != null && size < pageCount * header.pageSize) return healthWith(LibraryProblem.DatabaseTruncated)
     return when (probe.bookTable(database)) {
-        BookTableState.HasBooks -> null
-        BookTableState.NoBooks, BookTableState.NoTable -> LibraryProblem.DatabaseEmpty
-        BookTableState.Unreadable -> LibraryProblem.DatabaseUnreadable
-        BookTableState.Inconclusive -> null
+        BookTableState.HasBooks -> LibraryHealth(emptyList())
+        BookTableState.NoBooks, BookTableState.NoTable -> healthWith(LibraryProblem.DatabaseEmpty)
+        BookTableState.Unreadable -> healthWith(LibraryProblem.DatabaseUnreadable)
+        BookTableState.Inconclusive -> LibraryHealth(emptyList(), conclusive = false)
     }
 }
+
+private fun healthWith(problem: LibraryProblem) = LibraryHealth(listOf(problem))
 
 private const val SQLITE_ERROR = 1
 private const val SQLITE_CORRUPT = 11

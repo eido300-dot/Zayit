@@ -51,6 +51,8 @@ import io.github.kdroidfilter.seforimapp.features.database.health.LibraryCheckWi
 import io.github.kdroidfilter.seforimapp.features.database.health.LibraryDegradedLayout
 import io.github.kdroidfilter.seforimapp.features.database.health.asProblem
 import io.github.kdroidfilter.seforimapp.features.database.health.checkLibraryAfterStart
+import io.github.kdroidfilter.seforimapp.features.database.health.checkOptionalLibraryParts
+import io.github.kdroidfilter.seforimapp.features.database.health.reinstallHelpsFor
 import io.github.kdroidfilter.seforimapp.features.database.health.requestLibraryReinstall
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseUpdateWindow
 import io.github.kdroidfilter.seforimapp.features.onboarding.OnBoardingWindow
@@ -65,7 +67,7 @@ import io.github.kdroidfilter.seforimapp.framework.database.LibraryHealth
 import io.github.kdroidfilter.seforimapp.framework.database.LibraryProblem
 import io.github.kdroidfilter.seforimapp.framework.database.PendingDbCleanup
 import io.github.kdroidfilter.seforimapp.framework.database.StartupRoute
-import io.github.kdroidfilter.seforimapp.framework.database.checkLibraryHealth
+import io.github.kdroidfilter.seforimapp.framework.database.checkRequiredParts
 import io.github.kdroidfilter.seforimapp.framework.database.decodeProblems
 import io.github.kdroidfilter.seforimapp.framework.database.expectedDatabasePath
 import io.github.kdroidfilter.seforimapp.framework.database.isDatabasePathOverridden
@@ -118,17 +120,18 @@ private val AOT_TRAINING_DURATION = 45.seconds
 private fun computeStartupRoute(): StartupRoute =
     runSuspendCatching { readStartupRoute() }
         .onFailure { errorln(it) { "[startup] the library check failed; opening the app without it" } }
-        .getOrElse { StartupRoute.Main(emptyList()) }
+        .getOrElse { StartupRoute.Main(libraryChecked = false) }
 
 /**
- * Determines the initial route synchronously: settings, file sizes, the 100-byte database header,
- * one read-only query and the index metadata. All fast local I/O, well under a second.
+ * Determines the initial route synchronously: settings, file sizes, the 100-byte database header
+ * and one read-only query. All fast local I/O, well under a second. The indexes and the dictionary
+ * are checked once the main window is up ([checkOptionalLibraryParts]).
  */
 private fun readStartupRoute(): StartupRoute {
     if (!AppSettings.isOnboardingFinished()) return StartupRoute.Onboarding
     val database = runCatching { Path.of(expectedDatabasePath()) }.getOrNull()
     val health =
-        database?.let { checkLibraryHealth(libraryFilesFor(it)) }
+        database?.let { checkRequiredParts(libraryFilesFor(it)) }
             ?: LibraryHealth(listOf(LibraryProblem.DatabaseMissing))
     val modified = database?.let { runCatching { Files.getLastModifiedTime(it).toMillis() }.getOrNull() }
     val requested = AppSettings.getReinstallRequest()?.let(::decodeProblems)
@@ -143,17 +146,17 @@ private fun readStartupRoute(): StartupRoute {
             repeatedAfterReinstall = isRepeatedAfterReinstall(AppSettings.getLastReinstallMarker(), health.problems, modified),
             reinstallRequested = requested,
         )
-    // Written only when it changes: in portable mode every write is a durable save on the drive.
-    val marker =
-        when (route) {
-            is StartupRoute.Update ->
-                if (route.problems.isNotEmpty()) reinstallMarker(route.problems, modified) else AppSettings.getLastReinstallMarker()
-            // A portable library is only known to be fine after it was read back (checkLibraryAfterStart).
-            is StartupRoute.Main ->
-                if (route.degraded.isEmpty() && !PortableEnvironment.isPortable) null else AppSettings.getLastReinstallMarker()
-            StartupRoute.Onboarding, is StartupRoute.LibraryError -> AppSettings.getLastReinstallMarker()
-        }
-    if (marker != AppSettings.getLastReinstallMarker()) AppSettings.setLastReinstallMarker(marker)
+    // Written only when it changes: in portable mode every write is a durable save on the drive. It is
+    // forgotten only after the checks once the main window is up (checkLibraryAfterStart), since the
+    // indexes and the dictionary are not known before.
+    if (route is StartupRoute.Update && route.problems.isNotEmpty()) {
+        val marker = reinstallMarker(route.problems, modified)
+        if (marker != AppSettings.getLastReinstallMarker()) AppSettings.setLastReinstallMarker(marker)
+    }
+    // An install may run now, and its session may never reach the main window (the installer can be
+    // closed on its last screen). A reinstall of the same version has the same fingerprint, so the
+    // last read-back is forgotten here, or the next launch would take it for this library's.
+    if (route is StartupRoute.Update && AppSettings.getVerifiedLibrary() != null) AppSettings.setVerifiedLibrary(null)
     if (!health.isHealthy) warnln { "[startup] library problems: ${health.problems}, route: $route" }
     return route
 }
@@ -307,11 +310,11 @@ fun main(args: Array<String>) {
         // Get MainAppState from DI graph
         val mainAppState = appGraph.mainAppState
 
-        // Startup routing reads settings, the database header and the index metadata. On a slow
+        // Startup routing reads settings, the database and the catalog. On a slow
         // or network drive that can take seconds, so it runs off the UI thread while
         // LibraryCheckWindow stands in (hidden unless it takes long). It is null until known.
         // A copy that found the drive in use only shows DriveInUseWindow and must write nothing.
-        var startupRoute by remember { mutableStateOf<StartupRoute?>(if (driveInUse) StartupRoute.Main(emptyList()) else null) }
+        var startupRoute by remember { mutableStateOf<StartupRoute?>(if (driveInUse) StartupRoute.Main(libraryChecked = false) else null) }
         LaunchedEffect(Unit) {
             if (startupRoute == null) {
                 startupRoute =
@@ -334,7 +337,7 @@ fun main(args: Array<String>) {
         }
         var libraryProblems by remember(startupRoute) { mutableStateOf(startupRoute?.libraryProblems().orEmpty()) }
         val libraryBlockedReason = (startupRoute as? StartupRoute.LibraryError)?.reason
-        var degradedProblems by remember(startupRoute) { mutableStateOf((startupRoute as? StartupRoute.Main)?.degraded.orEmpty()) }
+        var degradedProblems by remember { mutableStateOf(emptyList<LibraryProblem>()) }
         var damagedParts by remember { mutableStateOf(emptyList<DamagedPart>()) }
         var reinstallHelps by remember { mutableStateOf(true) }
         var reinstallRequested by remember { mutableStateOf(false) }
@@ -378,7 +381,6 @@ fun main(args: Array<String>) {
                             // After database update, refresh the version check and show main app
                             showDatabaseUpdate = false
                             libraryProblems = emptyList()
-                            degradedProblems = emptyList()
                         },
                         isDatabaseMissing = libraryProblems.isNotEmpty(),
                         problems = libraryProblems,
@@ -602,13 +604,22 @@ fun main(args: Array<String>) {
                             LaunchedEffect(Unit) {
                                 appGraph.appUpdateService.checkOnStartup()
                             }
-                            // Portable: read the library back once after an install to catch a drive
-                            // that lost data. Not in the installing session, whose reads hit the cache.
+                            // Check the indexes and the dictionary, left out of the startup check so the
+                            // window opens sooner. Then, portable: read the library back once after an
+                            // install to catch a drive that lost data. Not in the installing session,
+                            // whose reads hit the cache.
                             LaunchedEffect(Unit) {
+                                val degraded = checkOptionalLibraryParts()
+                                // The banner's offer is right from the start, not only after the read-back,
+                                // which takes minutes on a drive.
+                                if (!degraded.isNullOrEmpty()) reinstallHelps = reinstallHelpsFor(degraded)
+                                degradedProblems = degraded.orEmpty()
+                                val startupChecked = (startupRoute as? StartupRoute.Main)?.libraryChecked ?: true
                                 val found =
                                     checkLibraryAfterStart(
                                         installedThisSession = startupRoute !is StartupRoute.Main,
-                                        degraded = (startupRoute as? StartupRoute.Main)?.degraded.orEmpty(),
+                                        degraded = degraded.orEmpty(),
+                                        libraryChecked = startupChecked && degraded != null,
                                     )
                                 damagedParts = found.damaged
                                 reinstallHelps = found.reinstallHelps

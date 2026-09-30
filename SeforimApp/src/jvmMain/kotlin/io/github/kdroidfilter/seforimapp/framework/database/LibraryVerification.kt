@@ -171,7 +171,8 @@ class LibraryVerifier(
 /**
  * Identifies an installed library: the version from `release_info.txt` and the database's size. Not
  * its modification time, which changes whenever the app writes to the database. A reinstall of the
- * same version clears the stored fingerprint instead (see `verifyLibraryIfNeeded`).
+ * same version clears the stored fingerprint instead: when the update window opens (`readStartupRoute`
+ * in main.kt), and again in the installing session (`verifyIfNeeded`).
  */
 internal fun libraryFingerprint(
     version: String?,

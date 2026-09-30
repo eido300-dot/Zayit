@@ -162,7 +162,20 @@ class LibraryHealthCheckTest {
 
         assertEquals(listOf(LibraryProblem.CatalogMissing, LibraryProblem.DictionaryMissing), health.problems)
         assertTrue(health.needsReinstall)
-        assertEquals(listOf(LibraryProblem.DictionaryMissing), health.degraded)
+        assertEquals(listOf(LibraryProblem.DictionaryMissing), checkOptionalParts(files, dictionaryOverridden = false))
+        assertEquals(Severity.Degraded, LibraryProblem.DictionaryMissing.severity)
+    }
+
+    @Test
+    fun `the check before the first window leaves the indexes and the dictionary to the one after it`() {
+        createCompleteLibrary()
+        files.textIndex.toFile().deleteRecursively()
+        Files.delete(files.dictionary)
+
+        assertTrue(checkRequiredParts(files).isHealthy)
+        val optional = checkOptionalParts(files, dictionaryOverridden = false)
+        assertEquals(listOf(LibraryProblem.TextIndexMissing, LibraryProblem.DictionaryMissing), optional)
+        assertTrue(optional.all { it.severity == Severity.Degraded }, "what the window does not wait for only degrades the app")
     }
 
     @Test
@@ -235,13 +248,42 @@ class LibraryHealthCheckTest {
         override fun dictionaryValid(dictionary: Path) = true
     }
 
+    /** A healthy library that records which files were read. */
+    private class RecordingProbe : LibraryProbe {
+        val reads = mutableSetOf<Path>()
+
+        override fun size(path: Path): Long? = 1_000_000L.also { reads.add(path) }
+
+        override fun header(database: Path) = SqliteHeader(pageSize = 4096, pageCount = null).also { reads.add(database) }
+
+        override fun bookTable(database: Path) = BookTableState.HasBooks.also { reads.add(database) }
+
+        override fun luceneIndexComplete(directory: Path) = true.also { reads.add(directory) }
+
+        override fun dictionaryValid(dictionary: Path) = true.also { reads.add(dictionary) }
+    }
+
     @Test
-    fun `a check that could not run is not a damaged database`() {
-        assertEquals(emptyList(), checkLibraryHealth(files, FixedProbe(BookTableState.Inconclusive), false).problems)
-        assertEquals(
-            listOf(LibraryProblem.DatabaseUnreadable),
-            checkLibraryHealth(files, FixedProbe(BookTableState.Unreadable), false).problems,
-        )
+    fun `each half of the check reads only its own parts`() {
+        val required = RecordingProbe()
+        assertTrue(checkRequiredParts(files, required).isHealthy)
+        assertEquals(setOf(files.database, files.catalog), required.reads)
+
+        val optional = RecordingProbe()
+        assertEquals(emptyList(), checkOptionalParts(files, optional, dictionaryOverridden = false))
+        assertEquals(setOf(files.textIndex, files.lookupIndex, files.dictionary), optional.reads)
+    }
+
+    @Test
+    fun `a check that could not run is not a damaged database, nor a conclusive check`() {
+        val inconclusive = checkLibraryHealth(files, FixedProbe(BookTableState.Inconclusive), false)
+        assertEquals(emptyList(), inconclusive.problems)
+        assertFalse(inconclusive.conclusive, "nothing is ruled out")
+        assertFalse(checkRequiredParts(files, FixedProbe(BookTableState.Inconclusive)).conclusive)
+        assertTrue(checkRequiredParts(files, FixedProbe(BookTableState.HasBooks)).conclusive)
+        val unreadable = checkLibraryHealth(files, FixedProbe(BookTableState.Unreadable), false)
+        assertEquals(listOf(LibraryProblem.DatabaseUnreadable), unreadable.problems)
+        assertTrue(unreadable.conclusive)
     }
 
     @Test
