@@ -18,19 +18,31 @@ sealed interface InstallLocationState {
     data class Copying(
         val folder: String,
         val percent: Int,
-        val isUpdate: Boolean,
+        val kind: CopyKind,
     ) : InstallLocationState
 
     /** The portable copy is ready in [finalDir]; the user starts it from there. */
     data class Done(
         val finalDir: String,
-        val isUpdate: Boolean,
+        val kind: CopyKind,
     ) : InstallLocationState
 
     data class Failed(
         val folder: String,
         val reason: FailureReason,
     ) : InstallLocationState
+}
+
+/** What a copy does in the picked folder. */
+enum class CopyKind {
+    /** A new portable copy. */
+    New,
+
+    /** A new program for an existing copy, keeping its data. */
+    Update,
+
+    /** An existing copy put back after an interrupted update; nothing is copied. */
+    Recovery,
 }
 
 /** Share of [copied] out of [total], 0 to 100; an empty program counts as done. */

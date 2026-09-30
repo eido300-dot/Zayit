@@ -10,6 +10,7 @@ import io.github.kdroidfilter.seforimapp.framework.portable.writeDurably
 import io.github.kdroidfilter.seforimapp.logger.errorln
 import io.github.kdroidfilter.seforimapp.logger.warnln
 import java.io.IOException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
@@ -38,38 +39,49 @@ internal fun swapProgram(
     try {
         move(oldData, newData)
     } catch (e: IOException) {
-        undo(e) { move(plan.previous, plan.destination) }
-        throw e
+        throw undone(e) { move(plan.previous, plan.destination) }
     }
     try {
         move(plan.staging, plan.destination)
     } catch (e: IOException) {
-        undo(e) {
+        throw undone(e) {
             move(newData, oldData)
             move(plan.previous, plan.destination)
         }
-        throw e
     }
     syncDirectory(plan.destination.parent)
 }
 
-/** A rename in one step, retried while a scanner holds the fresh copy (see [RetryPolicy.INSTALL]). */
+/**
+ * A rename in one step, retried while a scanner holds the fresh copy (see [RetryPolicy.INSTALL]).
+ * An existing target fails at once: a rename would silently replace an empty folder, and a full
+ * one would only be retried.
+ */
+@Throws(IOException::class)
 internal fun moveForInstall(
     from: Path,
     to: Path,
-) = moveWithRetry(from, to, ATOMIC_MOVE, policy = RetryPolicy.INSTALL)
+) {
+    if (Files.exists(to, NOFOLLOW_LINKS)) throw FileAlreadyExistsException(to.toString())
+    moveWithRetry(from, to, ATOMIC_MOVE, policy = RetryPolicy.INSTALL)
+}
 
-private inline fun undo(
+/**
+ * Runs the [steps] that undo a failed swap and returns what to throw: [failure] once undone, or
+ * [FailureReason.UpdateLeftover] when the data could not be put back and is now aside.
+ */
+private inline fun undone(
     failure: IOException,
     steps: () -> Unit,
-) {
+): IOException =
     try {
         steps()
+        failure
     } catch (e: IOException) {
         failure.addSuppressed(e)
-        errorln(e) { "[portable-install] could not undo a failed update; the previous program is in Zayit.old" }
+        errorln(e) { "[portable-install] could not undo a failed update; the data is in $STAGING_SUFFIX or $PREVIOUS_SUFFIX" }
+        PortableInstallException(FailureReason.UpdateLeftover, failure)
     }
-}
 
 /**
  * Deletes a staging folder. With [protectData], one that holds a data folder is kept: outside a
@@ -80,7 +92,7 @@ internal fun discardStaging(
     staging: Path,
     protectData: Boolean = true,
 ) {
-    if (protectData && Files.exists(staging.resolve(PORTABLE_DATA_DIR_NAME), NOFOLLOW_LINKS)) {
+    if (protectData && holdsData(staging)) {
         errorln { "[portable-install] keeping $STAGING_SUFFIX folder: it holds the data of a portable copy" }
         return
     }
@@ -96,5 +108,20 @@ internal fun clearStaging(staging: Path) {
     if (Files.exists(staging, NOFOLLOW_LINKS)) throw PortableInstallException(FailureReason.UpdateLeftover)
 }
 
+/**
+ * Removes the previous program a finished update could not delete, before a new update. One that
+ * still holds a data folder is an interrupted update (see [holdsData]) and stops this one instead.
+ */
+internal fun clearPrevious(previous: Path) {
+    if (holdsData(previous) || !deleteTree(previous) || Files.exists(previous, NOFOLLOW_LINKS)) {
+        throw PortableInstallException(FailureReason.UpdateLeftover)
+    }
+}
+
+/** A real folder (not a link to one) holding a real data folder: a copy's data lives there. */
+internal fun holdsData(folder: Path): Boolean =
+    Files.isDirectory(folder, NOFOLLOW_LINKS) && Files.isDirectory(folder.resolve(PORTABLE_DATA_DIR_NAME), NOFOLLOW_LINKS)
+
+/** A portable copy: [holdsData], with the marker that makes it start in portable mode. */
 internal fun isPortableCopy(folder: Path): Boolean =
-    Files.isRegularFile(folder.resolve(PORTABLE_DATA_DIR_NAME).resolve(PORTABLE_MARKER_NAME), NOFOLLOW_LINKS)
+    holdsData(folder) && Files.isRegularFile(folder.resolve(PORTABLE_DATA_DIR_NAME).resolve(PORTABLE_MARKER_NAME), NOFOLLOW_LINKS)

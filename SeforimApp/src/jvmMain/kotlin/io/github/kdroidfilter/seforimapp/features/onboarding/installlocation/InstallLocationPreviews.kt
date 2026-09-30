@@ -49,9 +49,16 @@ private fun InstallLocationStaleCopyPreview() {
 
 @Composable
 @Preview
+private fun InstallLocationInterruptedUpdatePreview() {
+    val check = TargetCheck.InterruptedUpdate(DRIVE + PORTABLE_FOLDER_NAME + PREVIOUS_SUFFIX)
+    PreviewContainer { InstallLocationView(InstallLocationState.Checked(DRIVE, check), onEvent = {}) }
+}
+
+@Composable
+@Preview
 private fun InstallLocationCopyingPreview() {
     PreviewContainer {
-        InstallLocationView(InstallLocationState.Copying(DRIVE, percent = 42, isUpdate = false), onEvent = {})
+        InstallLocationView(InstallLocationState.Copying(DRIVE, percent = 42, kind = CopyKind.New), onEvent = {})
     }
 }
 
@@ -59,7 +66,7 @@ private fun InstallLocationCopyingPreview() {
 @Preview
 private fun InstallLocationDonePreview() {
     PreviewContainer {
-        InstallLocationView(InstallLocationState.Done(DRIVE + PORTABLE_FOLDER_NAME, isUpdate = false), onEvent = {})
+        InstallLocationView(InstallLocationState.Done(DRIVE + PORTABLE_FOLDER_NAME, CopyKind.New), onEvent = {})
     }
 }
 

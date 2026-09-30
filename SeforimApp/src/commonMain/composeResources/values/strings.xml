@@ -416,13 +416,19 @@
     <string name="install_location_update_button">עדכון התוכנה ושמירת הנתונים</string>
     <string name="install_location_stale">נמצאה בתיקייה העתקה קודמת שלא הושלמה. אפשר למחוק אותה ולהמשיך.</string>
     <string name="install_location_stale_button">מחיקה והמשך</string>
+    <string name="install_location_interrupted">עדכון קודם של העותק שבכונן נקטע באמצע, והנתונים שלכם (הספרייה, ההערות וההגדרות) נמצאים עכשיו בתיקייה %1$s. אל תמחקו אותה. אפשר להחזיר את העותק למקומו, בלי לאבד דבר.</string>
+    <string name="install_location_recover_button">החזרת העותק למקומו</string>
+    <string name="install_location_recheck_button">בדיקה חוזרת</string>
+    <string name="install_location_back_button">חזרה</string>
     <string name="install_location_copying">מעתיק את זית לכונן…</string>
     <string name="install_location_updating">מעדכן את התוכנה בכונן…</string>
     <string name="install_location_finishing">מסיים את ההעתקה…</string>
+    <string name="install_location_recovering">מחזיר את העותק למקומו…</string>
     <string name="install_location_cancel_button">ביטול</string>
     <string name="install_location_done_title">העותק הנייד מוכן</string>
     <string name="install_location_done">זית הועתק אל %1$s. סגרו את זית, ופתחו אותו מהתיקייה הזו בכונן. בהפעלה הראשונה מהכונן הספרייה תורד אל הכונן.</string>
     <string name="install_location_done_update">התוכנה בכונן עודכנה והנתונים נשמרו. סגרו את זית, ופתחו אותו מ-%1$s.</string>
+    <string name="install_location_done_recovered">העותק בכונן הוחזר למקומו, והנתונים נשמרו. סגרו את זית, ופתחו אותו מ-%1$s. כדי לוודא שהתוכנה בו מעודכנת, אפשר לבחור שוב את התיקייה ולעדכן אותה.</string>
     <string name="install_location_close_button">סגירת זית</string>
     <string name="install_location_warning_eject">לפני ניתוק הכונן, סגרו את זית והוציאו את הכונן בבטחה.</string>
     <string name="install_location_warning_format">פרמוט הכונן מוחק גם את ההערות וההדגשות. אל תמחקו את התיקייה Zayit אם אתם רוצים לשמור אותן.</string>
@@ -432,7 +438,8 @@
     <string name="install_location_failed_already_exists">בזמן ההעתקה נוצרה בתיקייה תיקייה בשם Zayit. ההעתקה בוטלה, והתיקייה הזו לא שונתה.</string>
     <string name="install_location_failed_copy">ההעתקה נכשלה, ושום דבר לא השתנה בכונן. בדקו שהכונן מחובר ושיש בו מקום, ונסו שוב.</string>
     <string name="install_location_failed_in_use">העותק שבכונן פתוח עכשיו, במחשב הזה או במחשב אחר. סגרו אותו ונסו שוב.</string>
-    <string name="install_location_failed_leftover">נשארה בכונן תיקייה מהעתקה או מעדכון קודמים (Zayit.partial או Zayit.old) שאי אפשר להסיר, וייתכן שהנתונים שלכם בתוכה. העבירו אותה ידנית למקום אחר ונסו שוב.</string>
+    <string name="install_location_failed_leftover">בכונן נשארה תיקייה מהעתקה או מעדכון קודמים (Zayit.partial או Zayit.old), וייתכן שהנתונים שלכם בתוכה. אל תמחקו אותה. לחצו על ״בדיקה חוזרת״ כדי להחזיר את העותק למקומו, ואם זה לא עוזר, העבירו את התיקייה ידנית למקום אחר.</string>
+    <string name="install_location_failed_links">הכונן הזה לא יכול להכיל את הקישורים הסימבוליים שבתוכנה (כמו כונן exFAT או FAT). ההעתקה בוטלה ושום דבר לא נשאר בכונן. בחרו כונן עם מערכת קבצים אחרת, כמו APFS במק או ext4 בלינוקס.</string>
 
     <!--Downloading-->
     <string name="onboarding_downloading_message">אנא המתן בזמן שאנו מורידים את מסד הנתונים</string>

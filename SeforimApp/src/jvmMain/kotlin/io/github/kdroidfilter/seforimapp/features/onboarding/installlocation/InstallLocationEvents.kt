@@ -12,6 +12,9 @@ sealed interface InstallLocationEvents {
     /** Replace the program of the portable copy found in the checked folder, keeping its data. */
     data object UpdateExisting : InstallLocationEvents
 
+    /** Put back the portable copy an interrupted update left aside in the checked folder. */
+    data object RecoverInterruptedUpdate : InstallLocationEvents
+
     /** Remove what an interrupted copy left in the checked folder, then check it again. */
     data object DeleteStalePartial : InstallLocationEvents
 

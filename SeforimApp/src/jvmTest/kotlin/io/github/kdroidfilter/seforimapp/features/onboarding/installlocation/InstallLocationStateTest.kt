@@ -36,6 +36,10 @@ class InstallLocationStateTest {
             InstallLocationEvents.DeleteStalePartial,
             primaryActionOf(TargetCheck.StalePartial("/media/usb/Zayit.partial"))?.second,
         )
+        assertEquals(
+            InstallLocationEvents.RecoverInterruptedUpdate,
+            primaryActionOf(TargetCheck.InterruptedUpdate("/media/usb/Zayit.old"))?.second,
+        )
     }
 
     @Test

@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.FileStore
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -111,12 +112,16 @@ class PortableInstallUseCase(
         mutex.withLock {
             withContext(ioDispatcher) {
                 val plan = requirePlan(targetParent)
-                requireUpdatable(plan)
+                if (!isPortableCopy(plan.destination)) throw PortableInstallException(FailureReason.Unavailable)
+                requireNotRunning(plan)
+                clearPrevious(plan.previous)
                 clearStaging(plan.staging)
                 var committed = false
                 try {
                     asInstallFailure {
                         stageProgram(plan, onProgress)
+                        // Again: the copy may have been started from the drive while this one was staged.
+                        requireNotRunning(plan)
                         swapProgram(plan, move)
                     }
                     committed = true
@@ -128,13 +133,41 @@ class PortableInstallUseCase(
             }
         }
 
+    /**
+     * Puts back the portable copy an interrupted update left aside (see
+     * [TargetCheck.InterruptedUpdate]) and returns its folder. From `Zayit.partial` the update is
+     * finished: its program was complete before the data moved in. From `Zayit.old` the update is
+     * undone. The program left without data is then removed.
+     *
+     * @throws PortableInstallException when there is nothing to put back, or `Zayit` is in the way.
+     */
+    suspend fun recoverInterruptedUpdate(targetParent: Path): String =
+        mutex.withLock {
+            withContext(ioDispatcher) {
+                val plan = requirePlan(targetParent)
+                val leftover = interruptedUpdateOf(plan)
+                if (leftover == null || Files.exists(plan.destination, NOFOLLOW_LINKS)) {
+                    throw PortableInstallException(FailureReason.UpdateLeftover)
+                }
+                asInstallFailure { move(leftover, plan.destination) }
+                syncDirectory(targetParent)
+                discardStaging(plan.staging)
+                if (!holdsData(plan.previous) && !deleteTree(plan.previous)) {
+                    warnln { "[portable-install] the previous program could not be fully removed" }
+                }
+                plan.destination.toString()
+            }
+        }
+
     private fun checkBlocking(targetParent: Path): TargetCheck {
         val plan = executable()?.let { planInstall(it, targetParent) }
         if (plan == null || !Files.isDirectory(targetParent)) return TargetCheck.Unavailable
         val store = Files.getFileStore(targetParent)
-        return locationProblem(plan, targetParent, store.type())
-            ?: existingCopy(plan)
-            ?: writeAndSpace(plan, targetParent, store)
+        val found = locationProblem(plan, targetParent, store.type()) ?: existingCopy(plan)
+        if (found != null && found !is TargetCheck.ExistingPortable) return found
+        // An update needs room and write access too, for the new program next to the old one.
+        val room = writeAndSpace(plan, targetParent, store, isUpdate = found != null)
+        return if (found != null && room is TargetCheck.Ok) found else room
     }
 
     private fun locationProblem(
@@ -145,25 +178,35 @@ class PortableInstallUseCase(
         when {
             isReallyInside(targetParent, plan.source) -> TargetCheck.InsideProgramDir
             isPathTooLong(targetParent.toString(), targetParent.fileSystem.separator) -> TargetCheck.PathTooLong
-            !isFileSystemSupported(type, targetParent.toString()) -> TargetCheck.UnsupportedFileSystem(type)
+            // The real path: a link or junction to a network share reports the remote disk's type.
+            !isFileSystemSupported(type, targetParent.toRealPath().toString()) -> TargetCheck.UnsupportedFileSystem(type)
             else -> null
         }
 
-    private fun existingCopy(plan: InstallPlan): TargetCheck? =
-        when {
+    private fun existingCopy(plan: InstallPlan): TargetCheck? {
+        val interrupted = interruptedUpdateOf(plan)
+        return when {
+            interrupted != null -> TargetCheck.InterruptedUpdate(interrupted.toString())
             isPortableCopy(plan.destination) -> TargetCheck.ExistingPortable(plan.destination.toString())
             Files.exists(plan.destination, NOFOLLOW_LINKS) -> TargetCheck.AlreadyExists(plan.destination.toString())
             Files.exists(plan.staging, NOFOLLOW_LINKS) -> TargetCheck.StalePartial(plan.staging.toString())
             else -> null
         }
+    }
 
+    /** The folder an interrupted update left the copy's data in, if any (see [holdsData]). */
+    private fun interruptedUpdateOf(plan: InstallPlan): Path? = listOf(plan.staging, plan.previous).firstOrNull(::holdsData)
+
+    /** Room for the program, plus the library for a new copy; an update keeps the library it has. */
     private fun writeAndSpace(
         plan: InstallPlan,
         targetParent: Path,
         store: FileStore,
+        isUpdate: Boolean,
     ): TargetCheck {
         if (!canWrite(targetParent)) return TargetCheck.NotWritable
-        val required = treeSize(plan.source) + AvailableDiskSpaceUseCase.REQUIRED_SPACE_BYTES
+        val library = if (isUpdate) 0 else AvailableDiskSpaceUseCase.REQUIRED_SPACE_BYTES
+        val required = treeSize(plan.source) + library
         val free = store.usableSpace
         return if (free < required) TargetCheck.NotEnoughSpace(free, required) else TargetCheck.Ok(free, required)
     }
@@ -171,25 +214,15 @@ class PortableInstallUseCase(
     private fun requirePlan(targetParent: Path): InstallPlan =
         executable()?.let { planInstall(it, targetParent) } ?: throw PortableInstallException(FailureReason.Unavailable)
 
-    /** Refuses to touch a copy that is not one, that is running, or that a failed update left aside. */
-    private fun requireUpdatable(plan: InstallPlan) {
-        val refusal =
-            when {
-                !isPortableCopy(plan.destination) -> FailureReason.Unavailable
-                Files.exists(plan.previous, NOFOLLOW_LINKS) -> FailureReason.UpdateLeftover
-                else ->
-                    when (val lock = DriveLock.tryAcquire(plan.destination.resolve(PORTABLE_DATA_DIR_NAME))) {
-                        // Released at once: Windows cannot rename a folder while a file in it is open.
-                        is DriveLock.Result.Acquired -> {
-                            lock.lock.close()
-                            null
-                        }
-                        DriveLock.Result.InUse -> FailureReason.DriveInUse
-                        // A drive without locks: the rename below fails on its own if the copy is running.
-                        is DriveLock.Result.Unavailable -> null
-                    }
-            }
-        if (refusal != null) throw PortableInstallException(refusal)
+    /** Refuses to swap the program of a copy that is running, on this computer or another one. */
+    private fun requireNotRunning(plan: InstallPlan) {
+        when (val lock = DriveLock.tryAcquire(plan.destination.resolve(PORTABLE_DATA_DIR_NAME))) {
+            // Released at once: Windows cannot rename a folder while a file in it is open.
+            is DriveLock.Result.Acquired -> lock.lock.close()
+            DriveLock.Result.InUse -> throw PortableInstallException(FailureReason.DriveInUse)
+            // A drive without locks: the rename fails on its own if the copy is running.
+            is DriveLock.Result.Unavailable -> Unit
+        }
     }
 
     /** Copies the program into a fresh staging folder and checks that it can run from there. */
@@ -211,6 +244,9 @@ class PortableInstallUseCase(
             block()
         } catch (e: PortableInstallException) {
             throw e
+        } catch (e: FileAlreadyExistsException) {
+            // Only the final rename can meet an existing folder: a Zayit created meanwhile.
+            throw PortableInstallException(FailureReason.AlreadyExists, e)
         } catch (e: IOException) {
             throw PortableInstallException(FailureReason.CopyFailed, e)
         }

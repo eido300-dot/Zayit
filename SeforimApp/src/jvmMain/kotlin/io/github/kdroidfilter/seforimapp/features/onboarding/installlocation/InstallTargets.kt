@@ -24,7 +24,23 @@ internal const val MAX_WINDOWS_TARGET_CHARS = 120
 private val FAT_TYPES = setOf("fat", "fat12", "fat16", "fat32", "vfat", "msdos")
 
 /** Network file systems: the library needs file locks and memory that a share does not give reliably. */
-private val NETWORK_TYPE_PREFIXES = listOf("nfs", "cifs", "smb", "fuse.sshfs", "9p", "afpfs", "webdav")
+private val NETWORK_TYPE_PREFIXES =
+    listOf(
+        "nfs",
+        "cifs",
+        "smb",
+        "fuse.sshfs",
+        "9p",
+        "afpfs",
+        "webdav",
+        "davfs",
+        "fuse.gvfsd-fuse",
+        "fuse.rclone",
+        "ceph",
+        "fuse.ceph",
+        "glusterfs",
+        "fuse.glusterfs",
+    )
 
 private val UNINSTALLER = Regex("""(?i)^uninstall .*\.exe$""")
 
@@ -67,11 +83,19 @@ sealed interface TargetCheck {
         val path: String,
     ) : TargetCheck
 
+    /**
+     * An update stopped between its renames, and the copy's data folder is in [path]
+     * (`Zayit.partial` or `Zayit.old`). It is put back in place, never deleted.
+     */
+    data class InterruptedUpdate(
+        val path: String,
+    ) : TargetCheck
+
     /** The program's own location is unknown (a development run) or the folder cannot be read. */
     data object Unavailable : TargetCheck
 }
 
-/** Why a copy or an update did not complete. Nothing is left half-done in any of these cases. */
+/** Why a copy or an update did not complete. Only [UpdateLeftover] leaves something to put back. */
 enum class FailureReason {
     /** The copied program cannot be run from there, as on a drive mounted without exec rights. */
     NotExecutable,
@@ -82,8 +106,14 @@ enum class FailureReason {
     /** The portable copy being updated is running, on this computer or another one. */
     DriveInUse,
 
-    /** An earlier update stopped halfway and left the previous program aside; see [PREVIOUS_SUFFIX]. */
+    /**
+     * A folder an earlier copy or update left ([STAGING_SUFFIX], [PREVIOUS_SUFFIX]) is in the way
+     * and may hold the user's data, so it is not deleted.
+     */
     UpdateLeftover,
+
+    /** The drive cannot hold the symbolic links the program contains (exFAT, FAT). */
+    LinksUnsupported,
 }
 
 /** A failed copy or update; an [IOException] so callers that handle file errors also handle this. */

@@ -57,6 +57,7 @@ import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.typography
 import seforimapp.seforimapp.generated.resources.Res
+import seforimapp.seforimapp.generated.resources.install_location_back_button
 import seforimapp.seforimapp.generated.resources.install_location_cancel_button
 import seforimapp.seforimapp.generated.resources.install_location_checking
 import seforimapp.seforimapp.generated.resources.install_location_choose_again
@@ -64,6 +65,7 @@ import seforimapp.seforimapp.generated.resources.install_location_close_button
 import seforimapp.seforimapp.generated.resources.install_location_copy_button
 import seforimapp.seforimapp.generated.resources.install_location_copying
 import seforimapp.seforimapp.generated.resources.install_location_done
+import seforimapp.seforimapp.generated.resources.install_location_done_recovered
 import seforimapp.seforimapp.generated.resources.install_location_done_title
 import seforimapp.seforimapp.generated.resources.install_location_done_update
 import seforimapp.seforimapp.generated.resources.install_location_drive_button
@@ -81,13 +83,18 @@ import seforimapp.seforimapp.generated.resources.install_location_failed_already
 import seforimapp.seforimapp.generated.resources.install_location_failed_copy
 import seforimapp.seforimapp.generated.resources.install_location_failed_in_use
 import seforimapp.seforimapp.generated.resources.install_location_failed_leftover
+import seforimapp.seforimapp.generated.resources.install_location_failed_links
 import seforimapp.seforimapp.generated.resources.install_location_failed_not_executable
 import seforimapp.seforimapp.generated.resources.install_location_finishing
 import seforimapp.seforimapp.generated.resources.install_location_folder
+import seforimapp.seforimapp.generated.resources.install_location_interrupted
 import seforimapp.seforimapp.generated.resources.install_location_local_button
 import seforimapp.seforimapp.generated.resources.install_location_local_desc
 import seforimapp.seforimapp.generated.resources.install_location_local_title
 import seforimapp.seforimapp.generated.resources.install_location_ok
+import seforimapp.seforimapp.generated.resources.install_location_recheck_button
+import seforimapp.seforimapp.generated.resources.install_location_recover_button
+import seforimapp.seforimapp.generated.resources.install_location_recovering
 import seforimapp.seforimapp.generated.resources.install_location_stale
 import seforimapp.seforimapp.generated.resources.install_location_stale_button
 import seforimapp.seforimapp.generated.resources.install_location_title
@@ -163,12 +170,11 @@ internal fun InstallLocationView(
     onExitApplication: () -> Unit = {},
 ) {
     val title = if (state is InstallLocationState.Done) Res.string.install_location_done_title else Res.string.install_location_title
-    val hasActions = state !is InstallLocationState.Choose && state !is InstallLocationState.Checking
     OnBoardingScaffold(
         title = stringResource(title),
         bottomAction =
-            if (hasActions) {
-                { InstallLocationActions(state, onEvent, onExitApplication) }
+            if (state !is InstallLocationState.Choose) {
+                { InstallLocationActions(state, onEvent, onPickDrive, onExitApplication) }
             } else {
                 null
             },
@@ -188,33 +194,52 @@ internal fun InstallLocationView(
 private fun InstallLocationActions(
     state: InstallLocationState,
     onEvent: (InstallLocationEvents) -> Unit,
+    onPickDrive: () -> Unit,
     onExitApplication: () -> Unit,
 ) {
-    val chooseAgain = stringResource(Res.string.install_location_choose_again)
+    val back = { onEvent(InstallLocationEvents.ChooseAgain) }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         when (state) {
+            is InstallLocationState.Checking -> ActionButton(Res.string.install_location_cancel_button, onClick = back)
             is InstallLocationState.Checked -> {
-                primaryActionOf(state.check)?.let { (label, event) ->
-                    DefaultButton(onClick = { onEvent(event) }) { Text(stringResource(label)) }
-                }
-                OutlinedButton(onClick = { onEvent(InstallLocationEvents.ChooseAgain) }) { Text(chooseAgain) }
+                val primary = primaryActionOf(state.check)
+                primary?.let { (label, event) -> ActionButton(label, isDefault = true) { onEvent(event) } }
+                ActionButton(Res.string.install_location_choose_again, isDefault = primary == null, onClick = onPickDrive)
+                ActionButton(Res.string.install_location_back_button, onClick = back)
             }
+            // Once everything is copied only the final rename is left, and a recovery is only renames:
+            // there is nothing to cancel.
             is InstallLocationState.Copying -> {
-                // Once everything is copied only the final rename is left: there is nothing to cancel.
-                if (state.percent < FULL_PERCENT) {
-                    OutlinedButton(onClick = { onEvent(InstallLocationEvents.ChooseAgain) }) {
-                        Text(stringResource(Res.string.install_location_cancel_button))
-                    }
+                if (state.kind != CopyKind.Recovery && state.percent < FULL_PERCENT) {
+                    ActionButton(Res.string.install_location_cancel_button, onClick = back)
                 }
             }
             is InstallLocationState.Done -> {
-                DefaultButton(onClick = onExitApplication) { Text(stringResource(Res.string.install_location_close_button)) }
+                ActionButton(Res.string.install_location_close_button, isDefault = true, onClick = onExitApplication)
+                ActionButton(Res.string.install_location_back_button, onClick = back)
             }
             is InstallLocationState.Failed -> {
-                DefaultButton(onClick = { onEvent(InstallLocationEvents.ChooseAgain) }) { Text(chooseAgain) }
+                ActionButton(Res.string.install_location_recheck_button, isDefault = true) {
+                    onEvent(InstallLocationEvents.FolderPicked(state.folder))
+                }
+                ActionButton(Res.string.install_location_choose_again, onClick = onPickDrive)
+                ActionButton(Res.string.install_location_back_button, onClick = back)
             }
-            InstallLocationState.Choose, is InstallLocationState.Checking -> Unit
+            InstallLocationState.Choose -> Unit
         }
+    }
+}
+
+@Composable
+private fun ActionButton(
+    label: StringResource,
+    isDefault: Boolean = false,
+    onClick: () -> Unit,
+) {
+    if (isDefault) {
+        DefaultButton(onClick = onClick) { Text(stringResource(label)) }
+    } else {
+        OutlinedButton(onClick = onClick) { Text(stringResource(label)) }
     }
 }
 
@@ -224,6 +249,8 @@ internal fun primaryActionOf(check: TargetCheck): Pair<StringResource, InstallLo
         is TargetCheck.Ok -> Res.string.install_location_copy_button to InstallLocationEvents.StartCopy
         is TargetCheck.ExistingPortable -> Res.string.install_location_update_button to InstallLocationEvents.UpdateExisting
         is TargetCheck.StalePartial -> Res.string.install_location_stale_button to InstallLocationEvents.DeleteStalePartial
+        is TargetCheck.InterruptedUpdate ->
+            Res.string.install_location_recover_button to InstallLocationEvents.RecoverInterruptedUpdate
         else -> null
     }
 
@@ -296,7 +323,8 @@ private fun CheckedView(state: InstallLocationState.Checked) {
         when (state.check) {
             is TargetCheck.Ok -> InlineSuccessBanner(text = message, modifier = Modifier.fillMaxWidth())
             is TargetCheck.ExistingPortable -> InlineInformationBanner(text = message, modifier = Modifier.fillMaxWidth())
-            is TargetCheck.StalePartial -> InlineWarningBanner(text = message, modifier = Modifier.fillMaxWidth())
+            is TargetCheck.StalePartial, is TargetCheck.InterruptedUpdate ->
+                InlineWarningBanner(text = message, modifier = Modifier.fillMaxWidth())
             else -> InlineErrorBanner(text = message, modifier = Modifier.fillMaxWidth())
         }
     }
@@ -316,6 +344,7 @@ private fun checkMessage(check: TargetCheck): String =
         is TargetCheck.ExistingPortable -> stringResource(Res.string.install_location_existing)
         is TargetCheck.AlreadyExists -> stringResource(Res.string.install_location_error_already_exists)
         is TargetCheck.StalePartial -> stringResource(Res.string.install_location_stale)
+        is TargetCheck.InterruptedUpdate -> stringResource(Res.string.install_location_interrupted, check.path)
         TargetCheck.Unavailable -> stringResource(Res.string.install_location_error_unavailable)
     }
 
@@ -327,9 +356,23 @@ private fun CopyingView(state: InstallLocationState.Copying) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(stringResource(Res.string.install_location_folder, state.folder))
-        val action = stringResource(if (state.isUpdate) Res.string.install_location_updating else Res.string.install_location_copying)
-        Text(if (state.percent < FULL_PERCENT) "$action ${state.percent}%" else stringResource(Res.string.install_location_finishing))
-        AnimatedHorizontalProgressBar(state.percent / FULL_PERCENT.toFloat(), Modifier.fillMaxWidth())
+        when {
+            state.kind == CopyKind.Recovery -> {
+                CircularProgressIndicator()
+                Text(stringResource(Res.string.install_location_recovering))
+            }
+            state.percent >= FULL_PERCENT -> Text(stringResource(Res.string.install_location_finishing))
+            else -> {
+                val action =
+                    stringResource(
+                        if (state.kind == CopyKind.Update) Res.string.install_location_updating else Res.string.install_location_copying,
+                    )
+                Text("$action ${state.percent}%")
+            }
+        }
+        if (state.kind != CopyKind.Recovery) {
+            AnimatedHorizontalProgressBar(state.percent / FULL_PERCENT.toFloat(), Modifier.fillMaxWidth())
+        }
     }
 }
 
@@ -340,7 +383,12 @@ private fun DoneView(state: InstallLocationState.Done) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        val message = if (state.isUpdate) Res.string.install_location_done_update else Res.string.install_location_done
+        val message =
+            when (state.kind) {
+                CopyKind.New -> Res.string.install_location_done
+                CopyKind.Update -> Res.string.install_location_done_update
+                CopyKind.Recovery -> Res.string.install_location_done_recovered
+            }
         InlineSuccessBanner(text = stringResource(message, state.finalDir), modifier = Modifier.fillMaxWidth())
         DONE_WARNINGS.forEach { warning ->
             InlineWarningBanner(text = stringResource(warning), modifier = Modifier.fillMaxWidth())
@@ -358,6 +406,7 @@ private fun FailedView(state: InstallLocationState.Failed) {
             FailureReason.Unavailable -> Res.string.install_location_error_unavailable
             FailureReason.DriveInUse -> Res.string.install_location_failed_in_use
             FailureReason.UpdateLeftover -> Res.string.install_location_failed_leftover
+            FailureReason.LinksUnsupported -> Res.string.install_location_failed_links
         }
     Column(
         modifier = Modifier.fillMaxWidth(),

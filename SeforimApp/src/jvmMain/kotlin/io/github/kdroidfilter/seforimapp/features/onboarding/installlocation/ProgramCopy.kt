@@ -7,6 +7,8 @@ import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
+import java.nio.file.AccessDeniedException
+import java.nio.file.FileSystemException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -42,7 +44,10 @@ internal fun listProgramEntries(source: Path): List<ProgramEntry> {
                 attrs: BasicFileAttributes,
             ): FileVisitResult {
                 if (dir == skippedData) return FileVisitResult.SKIP_SUBTREE
-                if (dir != source) entries += ProgramEntry(source.relativize(dir), ProgramEntry.Kind.Directory)
+                if (dir == source) return FileVisitResult.CONTINUE
+                // A Windows junction reads as a folder too; entering it would copy what it points to.
+                if (attrs.isOther) throw unsupportedEntry(source.relativize(dir))
+                entries += ProgramEntry(source.relativize(dir), ProgramEntry.Kind.Directory)
                 return FileVisitResult.CONTINUE
             }
 
@@ -56,7 +61,7 @@ internal fun listProgramEntries(source: Path): List<ProgramEntry> {
                     isTopLevelUninstaller -> Unit
                     attrs.isSymbolicLink -> entries += ProgramEntry(relative, ProgramEntry.Kind.Link)
                     attrs.isRegularFile -> entries += ProgramEntry(relative, ProgramEntry.Kind.File, attrs.size())
-                    else -> throw PortableInstallException(FailureReason.CopyFailed, IOException("unsupported entry: $relative"))
+                    else -> throw unsupportedEntry(relative)
                 }
                 return FileVisitResult.CONTINUE
             }
@@ -64,6 +69,9 @@ internal fun listProgramEntries(source: Path): List<ProgramEntry> {
     )
     return entries
 }
+
+private fun unsupportedEntry(relative: Path): PortableInstallException =
+    PortableInstallException(FailureReason.CopyFailed, IOException("unsupported entry: $relative"))
 
 /**
  * One entry of the program folder, relative to it, in the order it must be created.
@@ -113,7 +121,10 @@ internal fun copyProgramEntries(
     }
 }
 
-/** Links are recreated as they are, which a drive that does not support them (exFAT) refuses. */
+/**
+ * Links are recreated as they are. A drive that cannot hold them (exFAT, or Windows without the
+ * privilege) refuses with a bare file-system or access error, which retrying would not change.
+ */
 private fun copyLink(
     from: Path,
     to: Path,
@@ -121,7 +132,10 @@ private fun copyLink(
     try {
         Files.createSymbolicLink(to, Files.readSymbolicLink(from))
     } catch (e: UnsupportedOperationException) {
-        throw PortableInstallException(FailureReason.CopyFailed, e)
+        throw PortableInstallException(FailureReason.LinksUnsupported, e)
+    } catch (e: FileSystemException) {
+        val refused = e is AccessDeniedException || e.javaClass == FileSystemException::class.java
+        throw if (refused) PortableInstallException(FailureReason.LinksUnsupported, e) else e
     }
 }
 
@@ -147,10 +161,20 @@ internal fun copyFileDurably(
                 position += copied
                 onCopied(copied)
             }
+            if (tryForce(output)) return
         }
     }
     flushToDevice(to)
 }
+
+/** Flushes through the channel that wrote the file; false when this file system refuses it. */
+private fun tryForce(output: FileChannel): Boolean =
+    try {
+        output.force(true)
+        true
+    } catch (_: IOException) {
+        false
+    }
 
 /** The permission bits of [file] as a creation attribute, where the file system has them (not Windows). */
 private fun permissionsOf(file: Path): Array<FileAttribute<*>> {
@@ -158,6 +182,7 @@ private fun permissionsOf(file: Path): Array<FileAttribute<*>> {
     return arrayOf(PosixFilePermissions.asFileAttribute(view.readAttributes().permissions()))
 }
 
+/** The fallback of [tryForce], as for [forceToDisk]: a plain `fsync` through a new handle. */
 @Throws(IOException::class)
 private fun flushToDevice(to: Path) {
     try {

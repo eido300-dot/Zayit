@@ -76,11 +76,11 @@ class InstallLocationViewModelTest {
             val viewModel = checkedViewModel()
 
             viewModel.onEvent(InstallLocationEvents.StartCopy)
-            assertEquals(InstallLocationState.Copying(folder, percent = 25, isUpdate = false), viewModel.state.value)
+            assertEquals(InstallLocationState.Copying(folder, percent = 25, kind = CopyKind.New), viewModel.state.value)
 
             release.complete(Unit)
             advanceUntilIdle()
-            assertEquals(InstallLocationState.Done(finalDir, isUpdate = false), viewModel.state.value)
+            assertEquals(InstallLocationState.Done(finalDir, CopyKind.New), viewModel.state.value)
         }
 
     @Test
@@ -113,7 +113,7 @@ class InstallLocationViewModelTest {
             viewModel.onEvent(InstallLocationEvents.StartCopy)
 
             viewModel.onEvent(InstallLocationEvents.ScreenLeft)
-            assertEquals(InstallLocationState.Done(finalDir, isUpdate = false), viewModel.state.value)
+            assertEquals(InstallLocationState.Done(finalDir, CopyKind.New), viewModel.state.value)
 
             viewModel.onEvent(InstallLocationEvents.ChooseAgain)
             assertEquals(InstallLocationState.Choose, viewModel.state.value)
@@ -189,6 +189,43 @@ class InstallLocationViewModelTest {
         }
 
     @Test
+    fun `a folder picked twice while a cancelled copy cleans up is still checked only after the cleanup`() =
+        runTest(dispatcher) {
+            val cleanup = CompletableDeferred<Unit>()
+            val log = mutableListOf<String>()
+            coEvery { useCase.install(path, any()) } coAnswers {
+                try {
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) {
+                        cleanup.await()
+                        log += "copy cleaned up"
+                    }
+                }
+            }
+            val first = "/media/first"
+            val second = "/media/second"
+            coEvery { useCase.check(Path.of(first)) } coAnswers {
+                log += "first checked"
+                TargetCheck.NotWritable
+            }
+            coEvery { useCase.check(Path.of(second)) } coAnswers {
+                log += "second checked"
+                TargetCheck.NotWritable
+            }
+            val viewModel = checkedViewModel()
+            viewModel.onEvent(InstallLocationEvents.StartCopy)
+
+            viewModel.onEvent(InstallLocationEvents.FolderPicked(first))
+            viewModel.onEvent(InstallLocationEvents.FolderPicked(second))
+            cleanup.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(listOf("copy cleaned up", "second checked"), log)
+            assertEquals(InstallLocationState.Checked(second, TargetCheck.NotWritable), viewModel.state.value)
+        }
+
+    @Test
     fun `a cancelled copy that then fails does not replace what the screen shows now`() =
         runTest(dispatcher) {
             val cleanup = CompletableDeferred<Unit>()
@@ -237,7 +274,7 @@ class InstallLocationViewModelTest {
 
             viewModel.onEvent(InstallLocationEvents.UpdateExisting)
 
-            assertEquals(InstallLocationState.Done(finalDir, isUpdate = true), viewModel.state.value)
+            assertEquals(InstallLocationState.Done(finalDir, CopyKind.Update), viewModel.state.value)
             coVerify(exactly = 0) { useCase.install(any(), any()) }
         }
 
@@ -252,5 +289,38 @@ class InstallLocationViewModelTest {
 
             assertEquals(InstallLocationState.Checked(folder, ok), viewModel.state.value)
             coVerify(exactly = 1) { useCase.discardStalePartial(path) }
+        }
+
+    @Test
+    fun `a stale copy that cannot be removed fails instead of being offered again`() =
+        runTest(dispatcher) {
+            coEvery { useCase.check(path) } returns TargetCheck.StalePartial("/media/usb/Zayit.partial")
+            coEvery { useCase.discardStalePartial(path) } returns false
+            val viewModel = checkedViewModel()
+
+            viewModel.onEvent(InstallLocationEvents.DeleteStalePartial)
+
+            assertEquals(InstallLocationState.Failed(folder, FailureReason.UpdateLeftover), viewModel.state.value)
+        }
+
+    @Test
+    fun `an interrupted update is put back on request, and says so`() =
+        runTest(dispatcher) {
+            val release = CompletableDeferred<Unit>()
+            coEvery { useCase.check(path) } returns TargetCheck.InterruptedUpdate("/media/usb/Zayit.old")
+            coEvery { useCase.recoverInterruptedUpdate(path) } coAnswers {
+                release.await()
+                finalDir
+            }
+            val viewModel = checkedViewModel()
+
+            viewModel.onEvent(InstallLocationEvents.RecoverInterruptedUpdate)
+            assertEquals(InstallLocationState.Copying(folder, percent = 0, kind = CopyKind.Recovery), viewModel.state.value)
+
+            release.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(InstallLocationState.Done(finalDir, CopyKind.Recovery), viewModel.state.value)
+            coVerify(exactly = 0) { useCase.install(any(), any()) }
+            coVerify(exactly = 0) { useCase.updateProgram(any(), any()) }
         }
 }

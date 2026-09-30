@@ -8,6 +8,7 @@ import dev.zacsweers.metrox.viewmodel.ViewModelKey
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
 import io.github.kdroidfilter.seforimapp.logger.warnln
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.file.InvalidPathException
 import java.nio.file.Path
@@ -35,8 +37,9 @@ class InstallLocationViewModel(
     fun onEvent(event: InstallLocationEvents) {
         when (event) {
             is InstallLocationEvents.FolderPicked -> checkFolder(event.path)
-            InstallLocationEvents.StartCopy -> checkedFolder()?.let { copy(it, isUpdate = false) }
-            InstallLocationEvents.UpdateExisting -> checkedFolder()?.let { copy(it, isUpdate = true) }
+            InstallLocationEvents.StartCopy -> checkedFolder()?.let { copy(it, CopyKind.New) }
+            InstallLocationEvents.UpdateExisting -> checkedFolder()?.let { copy(it, CopyKind.Update) }
+            InstallLocationEvents.RecoverInterruptedUpdate -> checkedFolder()?.let { copy(it, CopyKind.Recovery) }
             InstallLocationEvents.DeleteStalePartial -> checkedFolder()?.let { discardStaleAndRecheck(it) }
             InstallLocationEvents.ChooseAgain -> reset()
             InstallLocationEvents.ScreenLeft -> if (_state.value !is InstallLocationState.Done) reset()
@@ -58,16 +61,21 @@ class InstallLocationViewModel(
         launchReplacing {
             val path = pathOf(folder) ?: return@launchReplacing
             _state.value = InstallLocationState.Checking(folder)
-            useCase.discardStalePartial(path)
-            _state.value = InstallLocationState.Checked(folder, useCase.check(path))
+            _state.value =
+                if (useCase.discardStalePartial(path)) {
+                    InstallLocationState.Checked(folder, useCase.check(path))
+                } else {
+                    // Checked again, the same folder would only be offered for removal again.
+                    InstallLocationState.Failed(folder, FailureReason.UpdateLeftover)
+                }
         }
 
     private fun copy(
         folder: String,
-        isUpdate: Boolean,
+        kind: CopyKind,
     ) = launchReplacing {
         val path = pathOf(folder) ?: return@launchReplacing
-        _state.value = InstallLocationState.Copying(folder, percent = 0, isUpdate = isUpdate)
+        _state.value = InstallLocationState.Copying(folder, percent = 0, kind = kind)
         val onProgress = { copied: Long, total: Long ->
             _state.update { current ->
                 if (current is InstallLocationState.Copying) current.copy(percent = percentOf(copied, total)) else current
@@ -75,8 +83,13 @@ class InstallLocationViewModel(
         }
         val outcome =
             try {
-                val finalDir = if (isUpdate) useCase.updateProgram(path, onProgress) else useCase.install(path, onProgress)
-                InstallLocationState.Done(finalDir, isUpdate)
+                val finalDir =
+                    when (kind) {
+                        CopyKind.New -> useCase.install(path, onProgress)
+                        CopyKind.Update -> useCase.updateProgram(path, onProgress)
+                        CopyKind.Recovery -> useCase.recoverInterruptedUpdate(path)
+                    }
+                InstallLocationState.Done(finalDir, kind)
             } catch (e: PortableInstallException) {
                 warnln(e) { "[portable-install] copy to the drive failed: ${e.reason}" }
                 InstallLocationState.Failed(folder, e.reason)
@@ -99,7 +112,10 @@ class InstallLocationViewModel(
         val previous = job
         job =
             viewModelScope.launch {
-                previous?.cancelAndJoin()
+                // Awaited to the end even if this job is cancelled meanwhile: the next job joins only
+                // this one, and must still start after the previous copy has cleaned up.
+                withContext(NonCancellable) { previous?.cancelAndJoin() }
+                currentCoroutineContext().ensureActive()
                 block()
             }
     }

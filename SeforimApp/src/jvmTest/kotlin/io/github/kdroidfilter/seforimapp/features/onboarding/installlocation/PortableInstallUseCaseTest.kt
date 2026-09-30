@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimapp.features.onboarding.installlocation
 
 import io.github.kdroidfilter.seforimapp.features.onboarding.diskspace.AvailableDiskSpaceUseCase
+import io.github.kdroidfilter.seforimapp.framework.portable.DriveLock
 import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_DATA_DIR_NAME
 import io.github.kdroidfilter.seforimapp.framework.portable.PORTABLE_MARKER_NAME
 import io.github.kdroidfilter.seforimapp.framework.portable.resolvePortableLayout
@@ -348,6 +349,7 @@ class PortableInstallUseCaseTest {
 
             assertEquals(FailureReason.UpdateLeftover, failure.reason)
             assertEquals("my notes", staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertEquals(TargetCheck.InterruptedUpdate(staging.toString()), useCase().check(drive))
             assertFalse(useCase().discardStalePartial(drive))
         }
 
@@ -414,16 +416,182 @@ class PortableInstallUseCaseTest {
         }
 
     @Test
-    fun `an update left halfway is not touched again`() =
+    fun `a previous program left with notes in it is never cleared`() =
         runBlocking {
             createProgram()
             createExistingCopy()
-            Files.createDirectories(previous)
+            Files.createDirectories(previous.resolve(PORTABLE_DATA_DIR_NAME))
+            previous.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").writeText("older notes")
 
+            assertEquals(TargetCheck.InterruptedUpdate(previous.toString()), useCase().check(drive))
             val failure = assertFailsWith<PortableInstallException> { useCase().updateProgram(drive) { _, _ -> } }
 
             assertEquals(FailureReason.UpdateLeftover, failure.reason)
             assertEquals("old exe", destination.resolve("zayit.exe").readText())
+            assertEquals("older notes", previous.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+        }
+
+    @Test
+    fun `a previous program left without notes is removed, and the update goes on`() =
+        runBlocking {
+            createProgram()
+            createExistingCopy()
+            Files.createDirectories(previous)
+            previous.resolve("zayit.exe").writeText("older exe")
+
+            useCase().updateProgram(drive) { _, _ -> }
+
+            assertEquals("exe", destination.resolve("zayit.exe").readText())
+            assertEquals("my notes", destination.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertFalse(Files.exists(previous))
+        }
+
+    @Test
+    fun `an update that could not be undone is reported, then finished on request`() =
+        runBlocking {
+            createProgram()
+            createExistingCopy()
+            val calls = AtomicInteger()
+            // 3 is the last rename (new program to Zayit), 4 the first step that undoes it.
+            val failingLastAndUndo: (Path, Path) -> Unit = { from, to ->
+                if (calls.incrementAndGet() in 3..4) throw IOException("sharing violation")
+                moveForInstall(from, to)
+            }
+
+            val failure = assertFailsWith<PortableInstallException> { useCase(move = failingLastAndUndo).updateProgram(drive) { _, _ -> } }
+            assertEquals(FailureReason.UpdateLeftover, failure.reason)
+            assertEquals("my notes", staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertEquals(TargetCheck.InterruptedUpdate(staging.toString()), useCase().check(drive))
+
+            assertEquals(destination.toString(), useCase().recoverInterruptedUpdate(drive))
+
+            assertEquals("exe", destination.resolve("zayit.exe").readText())
+            assertEquals("my notes", destination.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertFalse(Files.exists(staging, NOFOLLOW_LINKS))
+            assertFalse(Files.exists(previous, NOFOLLOW_LINKS))
+            assertEquals(TargetCheck.ExistingPortable(destination.toString()), useCase().check(drive))
+        }
+
+    @Test
+    fun `an update stopped with the notes still in the previous program is undone on request`() =
+        runBlocking {
+            createProgram()
+            createExistingCopy()
+            val calls = AtomicInteger()
+            // 3 is the last rename; its undo moves the notes back (4), then fails to put Zayit back (5).
+            val failingLastAndUndo: (Path, Path) -> Unit = { from, to ->
+                if (calls.incrementAndGet() in setOf(3, 5)) throw IOException("sharing violation")
+                moveForInstall(from, to)
+            }
+
+            val failure = assertFailsWith<PortableInstallException> { useCase(move = failingLastAndUndo).updateProgram(drive) { _, _ -> } }
+            assertEquals(FailureReason.UpdateLeftover, failure.reason)
+            assertEquals(TargetCheck.InterruptedUpdate(previous.toString()), useCase().check(drive))
+
+            useCase().recoverInterruptedUpdate(drive)
+
+            assertEquals("old exe", destination.resolve("zayit.exe").readText())
+            assertEquals("my notes", destination.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertFalse(Files.exists(staging, NOFOLLOW_LINKS))
+            assertFalse(Files.exists(previous, NOFOLLOW_LINKS))
+        }
+
+    @Test
+    fun `nothing is put back over a Zayit folder, or when nothing was left aside`() =
+        runBlocking {
+            createProgram()
+            assertEquals(
+                FailureReason.UpdateLeftover,
+                assertFailsWith<PortableInstallException> { useCase().recoverInterruptedUpdate(drive) }.reason,
+            )
+            Files.createDirectories(staging.resolve(PORTABLE_DATA_DIR_NAME))
+            staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").writeText("my notes")
+            Files.createDirectories(destination)
+            destination.resolve("mine.txt").writeText("keep")
+
+            val failure = assertFailsWith<PortableInstallException> { useCase().recoverInterruptedUpdate(drive) }
+
+            assertEquals(FailureReason.UpdateLeftover, failure.reason)
+            assertEquals("keep", destination.resolve("mine.txt").readText())
+            assertEquals("my notes", staging.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+        }
+
+    @Test
+    fun `a copy that is running is not updated`() =
+        runBlocking {
+            createProgram()
+            createExistingCopy()
+            val lock = assertIs<DriveLock.Result.Acquired>(DriveLock.tryAcquire(destination.resolve(PORTABLE_DATA_DIR_NAME))).lock
+
+            val failure = lock.use { assertFailsWith<PortableInstallException> { useCase().updateProgram(drive) { _, _ -> } } }
+
+            assertEquals(FailureReason.DriveInUse, failure.reason)
+            assertEquals("old exe", destination.resolve("zayit.exe").readText())
+            assertFalse(Files.exists(staging, NOFOLLOW_LINKS))
+        }
+
+    @Test
+    fun `a copy started while its update was being copied is not swapped`() =
+        runBlocking {
+            createProgram()
+            createExistingCopy()
+            var lock: DriveLock? = null
+            val startingCopy: (Path, Path, (Long) -> Unit) -> Unit = { from, to, onCopied ->
+                if (lock == null) {
+                    lock = assertIs<DriveLock.Result.Acquired>(DriveLock.tryAcquire(destination.resolve(PORTABLE_DATA_DIR_NAME))).lock
+                }
+                copyFileDurably(from, to, onCopied)
+            }
+
+            val failure =
+                try {
+                    assertFailsWith<PortableInstallException> { useCase(copyFile = startingCopy).updateProgram(drive) { _, _ -> } }
+                } finally {
+                    lock?.close()
+                }
+
+            assertEquals(FailureReason.DriveInUse, failure.reason)
+            assertEquals("old exe", destination.resolve("zayit.exe").readText())
+            assertEquals("my notes", destination.resolve("$PORTABLE_DATA_DIR_NAME/notes.db").readText())
+            assertFalse(Files.exists(staging, NOFOLLOW_LINKS))
+        }
+
+    @Test
+    fun `a Zayit that is a link to a portable copy is not offered for update`() =
+        runBlocking {
+            createProgram()
+            val elsewhere = root.resolve("elsewhere/Zayit")
+            Files.createDirectories(elsewhere.resolve(PORTABLE_DATA_DIR_NAME))
+            elsewhere.resolve("$PORTABLE_DATA_DIR_NAME/$PORTABLE_MARKER_NAME").writeText("")
+            Files.createSymbolicLink(destination, elsewhere)
+
+            assertIs<TargetCheck.AlreadyExists>(useCase().check(drive))
+            val failure = assertFailsWith<PortableInstallException> { useCase().updateProgram(drive) { _, _ -> } }
+
+            assertEquals(FailureReason.Unavailable, failure.reason)
+        }
+
+    @Test
+    fun `an existing copy in a folder that cannot be written to is refused`() =
+        runBlocking {
+            createProgram()
+            createExistingCopy()
+
+            assertEquals(TargetCheck.NotWritable, useCase(canWrite = { false }).check(drive))
+        }
+
+    @Test
+    fun `a special file in the program fails the copy rather than being left out`() =
+        runBlocking {
+            createProgram()
+            val fifo = programDir.resolve("lib/pipe")
+            val made = runCatching { ProcessBuilder("mkfifo", fifo.toString()).start().waitFor() == 0 }.getOrDefault(false)
+            if (!made) return@runBlocking
+
+            val failure = assertFailsWith<PortableInstallException> { useCase().install(drive) { _, _ -> } }
+
+            assertEquals(FailureReason.CopyFailed, failure.reason)
+            assertNothingLeft()
         }
 
     @Test
