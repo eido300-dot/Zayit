@@ -17,6 +17,9 @@ internal fun <T> File.writeAtomically(write: (FileOutputStream) -> T): T {
     dir.mkdirs()
     val tmp = File(dir, "$name.tmp")
     try {
+        // A link left at the temp name (a drive someone else prepared) is removed, never written
+        // through; the move below then replaces a link at the target instead of following it.
+        Files.deleteIfExists(tmp.toPath())
         val result =
             FileOutputStream(tmp).use { out ->
                 write(out).also {

@@ -29,6 +29,19 @@ class AtomicFilesTest {
     }
 
     @Test
+    fun `a link left at the temp name is replaced, not written through`() {
+        val elsewhere = File(dir, "elsewhere.txt").apply { writeText("not ours") }
+        val target = File(dir, "session.pb")
+        Files.createSymbolicLink(File(dir, "session.pb.tmp").toPath(), elsewhere.toPath())
+
+        target.writeAtomically { it.write("new".toByteArray()) }
+
+        assertEquals("not ours", elsewhere.readText())
+        assertEquals("new", target.readText())
+        assertFalse(Files.isSymbolicLink(target.toPath()))
+    }
+
+    @Test
     fun `failed write keeps previous content`() {
         val target = File(dir, "seforim.db")
         target.writeText("complete")
