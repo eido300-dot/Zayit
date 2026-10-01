@@ -10,6 +10,10 @@ sealed interface OnBoardingDestination {
     @Serializable
     data object LicenceScreen : OnBoardingDestination
 
+    /** On this computer, or as a portable copy on an external drive. */
+    @Serializable
+    data object InstallLocationScreen : OnBoardingDestination
+
     @Serializable
     data object AvailableDiskSpaceScreen : OnBoardingDestination
 

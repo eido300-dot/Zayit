@@ -424,6 +424,57 @@
     <string name="installation_releases_hint">עמוד ההפצות האחרון</string>
     <string name="installation_releases_source">ניתן להוריד מ:</string>
 
+    <!-- Install location: this computer or an external drive -->
+    <string name="install_location_title">איפה להתקין את זית?</string>
+    <string name="install_location_local_title">במחשב זה</string>
+    <string name="install_location_local_desc">זית והספרייה יותקנו במחשב הזה, כרגיל.</string>
+    <string name="install_location_local_button">התקנה במחשב</string>
+    <string name="install_location_drive_title">בכונן חיצוני</string>
+    <string name="install_location_drive_desc">עותק של זית נוצר בדיסק-און-קי או בכונן חיצוני, ורץ ממנו בכל מחשב. הספרייה, ההערות וההגדרות נשמרים בכונן, ולא במחשב.</string>
+    <string name="install_location_drive_button">בחירת כונן</string>
+    <string name="install_location_checking">בודק את התיקייה שנבחרה…</string>
+    <string name="install_location_folder">תיקייה: %1$s</string>
+    <string name="install_location_ok">יש מספיק מקום: פנויים %1$s, נדרשים %2$s. זית יועתק לתיקייה Zayit בתוכה.</string>
+    <string name="install_location_copy_button">העתקה לכונן</string>
+    <string name="install_location_choose_again">בחירת תיקייה אחרת</string>
+    <string name="install_location_error_filesystem">מערכת הקבצים של הכונן (%1$s) לא מתאימה. FAT32 לא יכולה להכיל את קובץ הספרייה, וכונן רשת לא שומר עליה בבטחה. פרמטו את הכונן ל-exFAT או ל-NTFS (הפרמוט מוחק את כל מה שעליו), או בחרו כונן אחר.</string>
+    <string name="install_location_error_space">אין מספיק מקום בכונן: פנויים %1$s, נדרשים %2$s.</string>
+    <string name="install_location_error_not_writable">אי אפשר לכתוב לתיקייה הזו. בדקו שהכונן לא מוגן מפני כתיבה.</string>
+    <string name="install_location_error_inside_program">התיקייה נמצאת בתוך תיקיית התוכנה של זית. בחרו תיקייה בכונן החיצוני.</string>
+    <string name="install_location_error_path_too_long">הנתיב של התיקייה ארוך מדי. בחרו תיקייה קרובה יותר לשורש הכונן.</string>
+    <string name="install_location_error_already_exists">בתיקייה כבר יש פריט בשם Zayit שאינו עותק נייד של זית. הוא לא ישתנה. בחרו תיקייה אחרת, או שנו את שמו.</string>
+    <string name="install_location_error_unavailable">אי אפשר לבדוק את התיקייה או להעתיק אליה את זית. בדקו שהכונן מחובר. בהרצת פיתוח ההעתקה לא זמינה.</string>
+    <string name="install_location_existing">בתיקייה הזו כבר יש עותק נייד של זית. אפשר לעדכן את התוכנה שבו, והספרייה, ההערות וההגדרות יישמרו.</string>
+    <string name="install_location_update_button">עדכון התוכנה ושמירת הנתונים</string>
+    <string name="install_location_stale">נמצאה בתיקייה העתקה קודמת שלא הושלמה. אפשר למחוק אותה ולהמשיך.</string>
+    <string name="install_location_stale_button">מחיקה והמשך</string>
+    <string name="install_location_interrupted">עדכון קודם של העותק שבכונן נקטע באמצע, והנתונים שלכם (הספרייה, ההערות וההגדרות) נמצאים עכשיו בתיקייה %1$s. אל תמחקו אותה. אפשר להחזיר את העותק למקומו, בלי לאבד דבר.</string>
+    <string name="install_location_leftover_in_the_way">בתיקייה נשארה התיקייה %1$s מהעתקה או מעדכון קודמים, ואולי יש בה נתונים של עותק נייד (ספרייה, הערות והגדרות). כדי שלא יאבדו נתונים, זית לא ישנה אותה ולא יעתיק או יעדכן לידה. העבירו אותה ידנית למקום אחר, ובחרו שוב את התיקייה.</string>
+    <string name="install_location_interrupted_read_only">עדכון קודם של העותק שבכונן נקטע באמצע, והנתונים שלכם (הספרייה, ההערות וההגדרות) נמצאים עכשיו בתיקייה %1$s. אל תמחקו אותה. אי אפשר לכתוב לכונן כרגע, ולכן אי אפשר להחזיר את העותק למקומו. בטלו את ההגנה מפני כתיבה, ובחרו שוב את התיקייה.</string>
+    <string name="install_location_recover_button">החזרת העותק למקומו</string>
+    <string name="install_location_recheck_button">בדיקה חוזרת</string>
+    <string name="install_location_back_button">חזרה</string>
+    <string name="install_location_copying">מעתיק את זית לכונן…</string>
+    <string name="install_location_updating">מעדכן את התוכנה בכונן…</string>
+    <string name="install_location_finishing">מסיים את ההעתקה…</string>
+    <string name="install_location_recovering">מחזיר את העותק למקומו…</string>
+    <string name="install_location_cancel_button">ביטול</string>
+    <string name="install_location_done_title">העותק הנייד מוכן</string>
+    <string name="install_location_done">זית הועתק אל %1$s. סגרו את זית, ופתחו אותו מהתיקייה הזו בכונן. בהפעלה הראשונה מהכונן הספרייה תורד אל הכונן.</string>
+    <string name="install_location_done_update">התוכנה בכונן עודכנה והנתונים נשמרו. סגרו את זית, ופתחו אותו מ-%1$s.</string>
+    <string name="install_location_done_recovered">העותק בכונן הוחזר למקומו, והנתונים נשמרו. סגרו את זית, ופתחו אותו מ-%1$s. כדי לוודא שהתוכנה בו מעודכנת, אפשר לבחור שוב את התיקייה ולעדכן אותה.</string>
+    <string name="install_location_close_button">סגירת זית</string>
+    <string name="install_location_warning_eject">לפני ניתוק הכונן, סגרו את זית והוציאו את הכונן בבטחה.</string>
+    <string name="install_location_warning_format">פרמוט הכונן מוחק גם את ההערות וההדגשות. אל תמחקו את התיקייה Zayit אם אתם רוצים לשמור אותן.</string>
+    <string name="install_location_warning_usb2">בכונן USB 2.0 זית יעבוד לאט.</string>
+    <string name="install_location_warning_links">קישורי zayit:// נפתחים בזית שמותקן במחשב, ולא בעותק שבכונן.</string>
+    <string name="install_location_failed_not_executable">אי אפשר להריץ תוכנות מהכונן הזה, למשל כשהוא מחובר בלי הרשאת הרצה. ההעתקה בוטלה ושום דבר לא נשאר בכונן.</string>
+    <string name="install_location_failed_already_exists">בזמן ההעתקה נוצרה בתיקייה תיקייה בשם Zayit. ההעתקה בוטלה, והתיקייה הזו לא שונתה.</string>
+    <string name="install_location_failed_copy">ההעתקה נכשלה, ושום דבר לא השתנה בכונן. בדקו שהכונן מחובר ושיש בו מקום, ונסו שוב.</string>
+    <string name="install_location_failed_in_use">העותק שבכונן פתוח עכשיו, במחשב הזה או במחשב אחר. סגרו אותו ונסו שוב.</string>
+    <string name="install_location_failed_leftover">בכונן נשארה תיקייה מהעתקה או מעדכון קודמים (Zayit.partial או Zayit.old), וייתכן שהנתונים שלכם בתוכה. אל תמחקו אותה. לחצו על ״בדיקה חוזרת״ כדי להחזיר את העותק למקומו, ואם זה לא עוזר, העבירו את התיקייה ידנית למקום אחר.</string>
+    <string name="install_location_failed_links">לא ניתן היה ליצור בכונן את הקישורים הסימבוליים שבתוכנה. בדרך כלל זה קורה בכונן שלא תומך בהם, כמו exFAT או FAT. ההעתקה בוטלה ושום דבר לא נשאר בכונן. בדקו שהכונן מחובר, או בחרו כונן עם מערכת קבצים אחרת, כמו APFS במק או ext4 בלינוקס.</string>
+
     <!--Downloading-->
     <string name="onboarding_downloading_message">אנא המתן בזמן שאנו מורידים את מסד הנתונים</string>
     <string name="onboarding_file_selection">בחירת קבצים</string>
@@ -557,6 +608,9 @@
     <string name="update_check_action">בדוק שוב</string>
     <string name="update_checking">בודק עדכונים…</string>
     <string name="update_check_failed">לא ניתן לבדוק עדכונים — ודא שקיים חיבור לאינטרנט</string>
+    <string name="update_portable_banner">גרסה %1$s זמינה. זית שרץ מכונן חיצוני לא מתעדכן לבד.</string>
+    <string name="update_portable_message">גרסה %1$s של זית זמינה. כדי לעדכן את העותק שבכונן, הורד את הגרסה החדשה והחלף בה את התוכנה שבכונן.</string>
+    <string name="update_open_download_page">לדף ההורדה</string>
 
     <!-- Filtering (search panels) accessibility labels -->
     <string name="filter_select_category">בחר קטגוריה לסינון</string>
@@ -639,4 +693,31 @@
     <string name="menu_window">חלון</string>
     <string name="menu_help">עזרה</string>
 
+    <!-- Library health check at startup -->
+    <string name="library_problem_database_missing">קובץ הספרייה (seforim.db) חסר</string>
+    <string name="library_problem_database_not_sqlite">קובץ הספרייה אינו מסד נתונים תקין</string>
+    <string name="library_problem_database_truncated">קובץ הספרייה קטוע: ההעתקה או ההורדה לא הושלמה</string>
+    <string name="library_problem_database_empty">קובץ הספרייה ריק</string>
+    <string name="library_problem_database_unreadable">לא ניתן לקרוא את קובץ הספרייה</string>
+    <string name="library_problem_catalog_missing">קטלוג הספרים (catalog.pb) חסר</string>
+    <string name="library_problem_text_index_missing">אינדקס החיפוש חסר או חלקי</string>
+    <string name="library_problem_lookup_index_missing">אינדקס ההשלמה בחיפוש חסר או חלקי</string>
+    <string name="library_problem_dictionary_missing">מילון צורות המילים חסר</string>
+    <string name="library_problems_found">נמצאו הבעיות הבאות:</string>
+    <string name="library_degraded_banner">חלק מקבצי הספרייה חסרים (%1$s). הספרים נפתחים, אבל חלק מהאפשרויות לא יעבדו.</string>
+    <string name="library_degraded_reinstall">התקנה מחדש</string>
+    <string name="library_degraded_dismiss">הסתר</string>
+    <string name="library_error_title">לא ניתן לפתוח את הספרייה</string>
+    <string name="library_error_override">נתיב הספרייה נקבע במשתנה הסביבה SEFORIMAPP_DATABASE_PATH, והתקנה מחדש לא משנה אותו. תקנו את הקובץ בנתיב הזה או הסירו את המשתנה, והפעילו את זית מחדש.</string>
+    <string name="library_error_repeated">אותה בעיה חזרה מיד אחרי ההתקנה מחדש, ולכן התקנה נוספת כנראה לא תעזור. ייתכן שהכונן פגום, מלא או מזויף. נסו כונן אחר.</string>
+    <string name="library_reinstall_did_not_help">התקנה מחדש כבר נוסתה ולא עזרה, ולכן היא לא מוצעת שוב. ייתכן שהכונן פגום או מזויף: נסו כונן אחר.</string>
+    <string name="library_check_title">בודק את הספרייה</string>
+    <string name="library_check_message">זית בודק את קבצי הספרייה. בכונן איטי או בכונן רשת זה יכול לקחת כמה שניות. אם זה נמשך הרבה זמן, ייתכן שהכונן לא מגיב: סגרו, חברו אותו מחדש ונסו שוב.</string>
+    <string name="library_check_close">סגירה</string>
+    <!-- Portable drive already in use -->
+    <string name="drive_in_use_title">זית כבר פתוח מהכונן הזה</string>
+    <string name="drive_in_use_message">עותק אחר של זית משתמש כבר בתיקיית הנתונים של הכונן, במחשב הזה או במחשב אחר. סגרו אותו ונסו שוב. פתיחה כפולה הייתה עלולה להרוס את ההערות וההגדרות.</string>
+    <string name="drive_in_use_close">סגירה</string>
+    <!-- Library read back after install (counterfeit or failing drive) -->
+    <string name="library_damaged_banner">הכונן איבד חלק מקבצי הספרייה: מה שנכתב אליו לא נקרא בחזרה כמו שנכתב. ייתכן שהכונן מזויף (נפח אמיתי קטן מהמוצהר) או פגום. בדקו אותו בכלי כמו H2testw או F3, והתקינו מחדש, רצוי על כונן אחר.</string>
 </resources>

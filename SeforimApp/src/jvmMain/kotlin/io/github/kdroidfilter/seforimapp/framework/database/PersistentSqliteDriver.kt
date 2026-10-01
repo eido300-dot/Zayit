@@ -7,9 +7,11 @@ import app.cash.sqldelight.db.SqlPreparedStatement
 import app.cash.sqldelight.driver.jdbc.JdbcCursor
 import app.cash.sqldelight.driver.jdbc.JdbcDriver
 import app.cash.sqldelight.driver.jdbc.JdbcPreparedStatement
+import io.github.kdroidfilter.seforimapp.logger.warnln
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.PreparedStatement
+import java.sql.SQLException
 import java.util.Properties
 
 /**
@@ -31,6 +33,9 @@ import java.util.Properties
  *    integer it passes on every generated query call. Statements are synchronized
  *    on the single connection because SQLite's JDBC connection is not thread-safe.
  *
+ * With [removableDrive], the read tuning that maps the file into memory is turned off before it is
+ * ever applied (see [removableDriveSql]).
+ *
  * Transactions are handled by [JdbcDriver]'s base `autoCommit` machinery; we just
  * ensure our cached prepared statements aren't handed out while another thread holds
  * the connection by synchronizing the execute methods on `connection`.
@@ -38,6 +43,7 @@ import java.util.Properties
 class PersistentSqliteDriver(
     url: String,
     properties: Properties = Properties(),
+    private val removableDrive: Boolean = false,
 ) : JdbcDriver() {
     private val connection: Connection = DriverManager.getConnection(url, properties)
 
@@ -84,22 +90,38 @@ class PersistentSqliteDriver(
         parameters: Int,
         binders: (SqlPreparedStatement.() -> Unit)?,
     ): QueryResult<Long> {
+        val rewritten = if (removableDrive) removableDriveSql(sql) else sql
         synchronized(connection) {
-            val stmt = prepare(sql)
-            stmt.clearParameters()
-            if (binders != null) JdbcPreparedStatement(stmt).binders()
-            val hasResultSet = stmt.execute()
-            val rows =
-                if (hasResultSet) {
-                    // Drain any result set to release the statement's cursor so the next
-                    // call (e.g. a subsequent PRAGMA) doesn't hit SQLITE_BUSY.
-                    stmt.resultSet?.close()
-                    0L
-                } else {
-                    stmt.updateCount.toLong()
-                }
-            return QueryResult.Value(rows)
+            return try {
+                executeStatement(rewritten, binders)
+            } catch (e: SQLException) {
+                // A pragma that could not be applied (the file is in use by another connection, the
+                // drive is write-protected) leaves the file as it was; the app still opens.
+                if (rewritten == sql) throw e
+                warnln(e) { "[database] could not apply '$rewritten' for a removable drive" }
+                QueryResult.Value(0L)
+            }
         }
+    }
+
+    private fun executeStatement(
+        sql: String,
+        binders: (SqlPreparedStatement.() -> Unit)?,
+    ): QueryResult<Long> {
+        val stmt = prepare(sql)
+        stmt.clearParameters()
+        if (binders != null) JdbcPreparedStatement(stmt).binders()
+        val hasResultSet = stmt.execute()
+        val rows =
+            if (hasResultSet) {
+                // Drain any result set to release the statement's cursor so the next
+                // call (e.g. a subsequent PRAGMA) doesn't hit SQLITE_BUSY.
+                stmt.resultSet?.close()
+                0L
+            } else {
+                stmt.updateCount.toLong()
+            }
+        return QueryResult.Value(rows)
     }
 
     override fun <R> executeQuery(
@@ -134,5 +156,23 @@ class PersistentSqliteDriver(
         val fresh = connection.prepareStatement(sql)
         statementCache[sql] = fresh
         return fresh
+    }
+}
+
+/**
+ * Rewrites the repository's read tuning for a removable drive, or returns [sql] unchanged.
+ *
+ * - `journal_mode=WAL` becomes `DELETE`: WAL keeps a `-shm` file that SQLite always maps into
+ *   memory, whatever `mmap_size` says, and unplugging the drive while a mapped page is read kills
+ *   the process (`SIGBUS`, `EXCEPTION_IN_PAGE_ERROR`). Choosing the mode before it is applied also
+ *   spares the drive the two header writes a switch back would cost on every launch.
+ * - `mmap_size=N` becomes `0`: with the file mapped, a failed read is a crash instead of an error.
+ */
+internal fun removableDriveSql(sql: String): String {
+    val normalized = sql.filterNot(Char::isWhitespace).lowercase()
+    return when {
+        normalized == "pragmajournal_mode=wal" -> "PRAGMA journal_mode=DELETE"
+        normalized.startsWith("pragmammap_size=") -> "PRAGMA mmap_size=0"
+        else -> sql
     }
 }

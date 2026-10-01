@@ -11,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -18,11 +19,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import io.github.kdroidfilter.seforimapp.core.presentation.components.AccentMarkdownView
-import io.github.kdroidfilter.seforimapp.features.onboarding.navigation.OnBoardingDestination
 import io.github.kdroidfilter.seforimapp.features.onboarding.navigation.ProgressBarState
 import io.github.kdroidfilter.seforimapp.features.onboarding.ui.components.OnBoardingScaffold
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.kdroidfilter.seforimapp.theme.PreviewContainer
+import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 import org.jetbrains.jewel.ui.component.Checkbox
 import org.jetbrains.jewel.ui.component.DefaultButton
@@ -41,23 +43,24 @@ fun LicenceScreen(
         progressBarState.setProgress(0.1f)
     }
     val appGraph = LocalAppGraph.current
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
     LicenceView(
         onNext = {
-            // Check if DB exists and has compatible version
-            val dbExists = runCatching { appGraph.databasePathProvider.get() }.isSuccess
-            val dbVersionCompatible =
-                if (dbExists) {
-                    appGraph.databaseVersionManager.isDatabaseVersionCompatible()
-                } else {
-                    false
+            if (!checking) {
+                checking = true
+                scope.launch {
+                    // Only a copy running from a drive checks the library here; an installed Zayit
+                    // first asks where to install, and checks once "this computer" is chosen.
+                    val isPortable = PortableEnvironment.isPortable
+                    val isDatabaseReady =
+                        try {
+                            isPortable && checkInstalledLibraryReady(appGraph.databasePathProvider, appGraph.databaseVersionManager)
+                        } finally {
+                            checking = false
+                        }
+                    navController.navigate(nextAfterLicence(isPortable, isDatabaseReady))
                 }
-
-            if (dbExists && dbVersionCompatible) {
-                // DB exists and version is compatible - skip install flow and go to user info
-                navController.navigate(OnBoardingDestination.UserProfilScreen)
-            } else {
-                // DB doesn't exist or version is incompatible - continue with installation flow
-                navController.navigate(OnBoardingDestination.AvailableDiskSpaceScreen)
             }
         },
         onPrevious = { navController.navigateUp() },

@@ -46,6 +46,8 @@ import io.github.kdroidfilter.seforimapp.core.presentation.utils.LocalIsTouchMod
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.LocalWindowViewModelStoreOwner
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.detectTouchMode
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.processKeyShortcuts
+import io.github.kdroidfilter.seforimapp.features.database.health.LibraryBanner
+import io.github.kdroidfilter.seforimapp.features.database.health.LibraryBannerState
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindow
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowEvents
 import io.github.kdroidfilter.seforimapp.features.settings.SettingsWindowViewModel
@@ -53,6 +55,7 @@ import io.github.kdroidfilter.seforimapp.framework.desktop.LocalOpenWindow
 import io.github.kdroidfilter.seforimapp.framework.desktop.OpenWindow
 import io.github.kdroidfilter.seforimapp.framework.di.LocalAppGraph
 import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
+import java.util.UUID
 import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
 import seforimapp.seforimapp.generated.resources.AppIcon
@@ -61,18 +64,19 @@ import seforimapp.seforimapp.generated.resources.app_name
 import seforimapp.seforimapp.generated.resources.desktop_default_name
 import seforimapp.seforimapp.generated.resources.home
 import seforimapp.seforimapp.generated.resources.search_results_tab_title
-import java.util.UUID
 
 /**
  * One main application window. The window displays one virtual desktop's tabs; several windows can
  * be open at once (each on its own desktop, or several windows of the same desktop). Everything
- * window-scoped comes from [openWindow]; app-wide dialogs (settings, updates) live in main.kt.
+ * window-scoped comes from [openWindow]; app-wide dialogs (settings, updates) live in main.kt, and
+ * the library banners ([libraryBanner]) are shared by every window.
  */
 @Composable
 fun NucleusApplicationScope.MainAppWindow(
     openWindow: OpenWindow,
     settingsWindowViewModel: SettingsWindowViewModel,
     windowViewModelOwner: ViewModelStoreOwner,
+    libraryBanner: LibraryBannerState,
     onQuit: () -> Unit,
 ) {
     val appSettings = LocalAppGraph.current.appSettings
@@ -434,7 +438,7 @@ fun NucleusApplicationScope.MainAppWindow(
                         },
             ) {
                 CompositionLocalProvider(LocalIsTouchMode provides isTouchMode) {
-                    WindowBody(openWindow)
+                    LibraryBanner(libraryBanner) { WindowBody(openWindow) }
                 }
             }
         }

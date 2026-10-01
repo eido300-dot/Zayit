@@ -3,6 +3,9 @@ package io.github.kdroidfilter.seforimapp.features.database.update
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.framework.database.DatabasePathProvider
 import io.github.kdroidfilter.seforimapp.framework.database.PendingDbCleanup
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
+import io.github.kdroidfilter.seforimapp.framework.portable.deleteTree
+import io.github.kdroidfilter.seforimapp.framework.portable.treeSize
 import io.github.kdroidfilter.seforimapp.logger.debugln
 import io.github.kdroidfilter.seforimapp.logger.warnln
 import io.github.vinceglb.filekit.FileKit
@@ -11,7 +14,9 @@ import io.github.vinceglb.filekit.path
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
@@ -64,6 +69,11 @@ class DatabaseCleanupUseCase(
             val dirs = LinkedHashSet<File>()
             currentDbPath?.let { File(it).parentFile?.let(dirs::add) }
             runCatching { File(FileKit.databasesDir.path) }.getOrNull()?.let(dirs::add)
+            dirs.removeAll { dir ->
+                !PortableEnvironment.mayCleanUp(dir.toPath()).also { allowed ->
+                    if (!allowed) warnln { "[DatabaseCleanup] ${dir.name} leads outside the drive's data folder; skipped" }
+                }
+            }
 
             val result = removeArtifacts(dirs, keep)
             when (result) {
@@ -96,7 +106,7 @@ class DatabaseCleanupUseCase(
                     if (!isDatabaseArtifact(file)) continue
                     if (runCatching { file.canonicalPath }.getOrNull() in keepPaths) continue
                     val size = sizeOf(file)
-                    if (deleteRecursively(file)) {
+                    if (deleteTree(file.toPath(), ::logFailure)) {
                         freed += size
                     } else {
                         undeletable += file
@@ -139,29 +149,14 @@ class DatabaseCleanupUseCase(
             name.endsWith(".tmp")
     }
 
-    private fun sizeOf(file: File): Long =
-        runCatching {
-            if (file.isDirectory) {
-                file.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
-            } else {
-                file.length()
-            }
-        }.getOrDefault(0L)
+    /** Links are not entered: on a drive someone else prepared, one to `/` would make this walk the computer. */
+    private fun sizeOf(file: File): Long = runCatching { treeSize(file.toPath()) }.getOrDefault(0L)
 
-    /**
-     * Deletes a file or directory tree using NIO so failures throw (and are logged)
-     * instead of silently returning false. Returns true if nothing remains afterwards.
-     */
-    private fun deleteRecursively(target: File): Boolean {
-        if (target.isDirectory) {
-            target.listFiles()?.forEach { deleteRecursively(it) }
-        }
-        return try {
-            Files.deleteIfExists(target.toPath())
-            !target.exists()
-        } catch (e: Exception) {
-            warnln { "[DatabaseCleanup] Could not delete ${target.absolutePath}: ${e.javaClass.simpleName} ${e.message}" }
-            !target.exists()
-        }
+    /** Logs an entry [deleteTree] could not remove; NIO surfaces the reason that [File.delete] would hide. */
+    private fun logFailure(
+        path: Path,
+        e: IOException,
+    ) {
+        warnln { "[DatabaseCleanup] Could not delete $path: ${e.javaClass.simpleName} ${e.message}" }
     }
 }
