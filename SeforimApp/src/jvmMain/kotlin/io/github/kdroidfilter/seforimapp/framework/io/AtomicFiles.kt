@@ -86,3 +86,29 @@ private const val MOVE_ATTEMPTS = 8
 internal const val UI_MOVE_ATTEMPTS = 2
 private const val MOVE_RETRY_BASE_MS = 50L
 private const val MOVE_RETRY_MAX_MS = 1_000L
+
+/**
+ * Pushes a long write to the device each [chunkBytes], so progress reported after each chunk
+ * follows a slow drive rather than the page cache, and the one sync at the end of [writeAtomically]
+ * does not stall for minutes after a multi-GB file. Only worth it on a removable drive: on the
+ * computer's own disk that final sync is enough.
+ */
+internal class ChunkedSync(
+    private val chunkBytes: Long = DEFAULT_CHUNK_BYTES,
+    private val sync: () -> Unit,
+) {
+    private var unsynced = 0L
+
+    /** Counts [count] bytes just written, and syncs once a whole chunk is waiting. */
+    fun wrote(count: Int) {
+        unsynced += count
+        if (unsynced >= chunkBytes) {
+            sync()
+            unsynced = 0
+        }
+    }
+
+    companion object {
+        const val DEFAULT_CHUNK_BYTES = 8L * 1024 * 1024
+    }
+}

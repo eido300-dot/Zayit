@@ -11,6 +11,7 @@ import dev.nucleusframework.updater.UpdateLevel
 import dev.nucleusframework.updater.UpdateResult
 import dev.nucleusframework.updater.provider.GenericProvider
 import dev.nucleusframework.updater.provider.GitHubProvider
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.kdroidfilter.seforimapp.logger.errorln
 import io.github.kdroidfilter.seforimapp.logger.infoln
 import io.github.santimattius.structured.annotations.StructuredScope
@@ -70,15 +71,26 @@ sealed interface UpdateUiState {
     data class Error(
         val message: String,
     ) : UpdateUiState
+
+    /**
+     * A newer version exists, but this copy runs from an external drive. The Nucleus installers
+     * update the host computer (NSIS, deb/rpm) or rewrite the bundle on the drive in place (macOS),
+     * so nothing is downloaded or installed; the user is only told the version and where to get it.
+     */
+    data class PortableUpdateAvailable(
+        val version: String,
+        val level: UpdateLevel,
+    ) : UpdateUiState
 }
 
-/** True when the title-bar update badge should be shown (PROMPT updates only). */
+/** True when the title-bar update badge should be shown (PROMPT updates and portable notices only). */
 val UpdateUiState.showTitleBarIcon: Boolean
     get() =
         when (this) {
             is UpdateUiState.Available -> mode == UpdateMode.PROMPT
             is UpdateUiState.Downloading -> mode == UpdateMode.PROMPT
             is UpdateUiState.ReadyToInstall -> mode == UpdateMode.PROMPT
+            is UpdateUiState.PortableUpdateAvailable -> true
             else -> false
         }
 
@@ -89,6 +101,7 @@ val UpdateUiState.availableVersion: String?
             is UpdateUiState.Available -> version
             is UpdateUiState.Downloading -> version
             is UpdateUiState.ReadyToInstall -> version
+            is UpdateUiState.PortableUpdateAvailable -> version
             else -> null
         }
 
@@ -116,6 +129,22 @@ fun needsDbWarning(level: UpdateLevel): Boolean = level == UpdateLevel.MINOR || 
 
 /** PATCH updates are pre-downloaded at startup on every platform so install is instant. */
 fun shouldPreDownload(level: UpdateLevel): Boolean = level == UpdateLevel.PATCH
+
+/**
+ * The state shown for an update that was found. From an external drive it never becomes
+ * [UpdateUiState.Available], so no path can start a download or an installer.
+ */
+internal fun availableUpdateState(
+    version: String,
+    level: UpdateLevel,
+    os: Platform,
+    isPortable: Boolean,
+): UpdateUiState =
+    if (isPortable) {
+        UpdateUiState.PortableUpdateAvailable(version, level)
+    } else {
+        UpdateUiState.Available(version, level, resolveUpdateMode(level, os), needsDbWarning(level))
+    }
 
 /** Thin abstraction over [NucleusUpdater] so the service can be unit-tested with a fake. */
 interface Updater {
@@ -206,6 +235,8 @@ class AppUpdateService(
     private val updaterProvider: () -> Updater,
     private val config: AppUpdateConfig,
     private val os: Platform,
+    // True when running from an external drive: updates are reported but never downloaded or installed.
+    private val isPortable: Boolean = false,
     // App-lifetime scope so a user-triggered download keeps running after the dialog is closed.
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
@@ -232,13 +263,14 @@ class AppUpdateService(
                 _state.value = UpdateUiState.Error(result.exception.message ?: "update check failed")
             }
             is UpdateResult.Available -> {
-                pendingInfo = result.info
-                val mode = resolveUpdateMode(result.level, os)
-                val warn = needsDbWarning(result.level)
-                infoln { "[update] available v${result.info.version} level=${result.level} mode=$mode" }
-                _state.value = UpdateUiState.Available(result.info.version, result.level, mode, warn)
-                if (shouldPreDownload(result.level)) {
-                    download(result.info, result.level, mode, warn)
+                val state = availableUpdateState(result.info.version, result.level, os, isPortable)
+                infoln { "[update] available v${result.info.version} level=${result.level} state=$state" }
+                _state.value = state
+                if (state is UpdateUiState.Available) {
+                    pendingInfo = result.info
+                    if (shouldPreDownload(result.level)) {
+                        download(result.info, result.level, state.mode, state.needsDbWarning)
+                    }
                 }
             }
         }
@@ -269,7 +301,7 @@ class AppUpdateService(
      */
     fun startDownload() {
         val current = _state.value
-        if (current !is UpdateUiState.Available) return
+        if (isPortable || current !is UpdateUiState.Available) return
         if (downloadJob?.isActive == true) return
         val info = pendingInfo ?: return
         downloadJob = launchDownload(scope, info, current.level, current.mode, current.needsDbWarning)
@@ -313,7 +345,7 @@ class AppUpdateService(
     /** Installs the ready update and relaunches the app (from the dialog button). */
     fun installAndRestart() {
         val current = _state.value
-        if (current is UpdateUiState.ReadyToInstall) {
+        if (!isPortable && current is UpdateUiState.ReadyToInstall) {
             if (config.fakeState != null) {
                 infoln { "[update][fake] installAndRestart(${current.file})" }
                 return
@@ -328,7 +360,7 @@ class AppUpdateService(
      */
     fun installPendingOnClose(): Boolean {
         val current = _state.value
-        return if (current is UpdateUiState.ReadyToInstall && current.mode == UpdateMode.SILENT_ON_CLOSE) {
+        return if (!isPortable && current is UpdateUiState.ReadyToInstall && current.mode == UpdateMode.SILENT_ON_CLOSE) {
             if (config.fakeState != null) {
                 infoln { "[update][fake] installAndQuit(${current.file})" }
                 return false
@@ -355,12 +387,9 @@ class AppUpdateService(
         val fake = config.fakeState ?: return null
         val version = config.forceVersion ?: "9.9.9"
         return when (fake) {
-            "patch" ->
-                UpdateUiState.Available(version, UpdateLevel.PATCH, resolveUpdateMode(UpdateLevel.PATCH, os), false)
-            "minor" ->
-                UpdateUiState.Available(version, UpdateLevel.MINOR, UpdateMode.PROMPT, true)
-            "major" ->
-                UpdateUiState.Available(version, UpdateLevel.MAJOR, UpdateMode.PROMPT, true)
+            "patch" -> availableUpdateState(version, UpdateLevel.PATCH, os, isPortable)
+            "minor" -> availableUpdateState(version, UpdateLevel.MINOR, os, isPortable)
+            "major" -> availableUpdateState(version, UpdateLevel.MAJOR, os, isPortable)
             "downloading" ->
                 UpdateUiState.Downloading(version, UpdateLevel.MINOR, UpdateMode.PROMPT, true, 42)
             "ready" ->
@@ -370,15 +399,20 @@ class AppUpdateService(
     }
 
     companion object {
-        const val DOWNLOAD_URL = "https://kdroidfilter.github.io/Zayit/download"
-
         private const val GITHUB_OWNER = "kdroidFilter"
         private const val GITHUB_REPO = "Zayit"
+
+        /**
+         * Where a copy on a drive sends the user for a new version: the same releases the update check
+         * reads, so the version it announces is the one found there.
+         */
+        const val DOWNLOAD_URL = "https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
 
         /** Builds the production service wired to GitHub releases through the native SSL client. */
         fun create(
             config: AppUpdateConfig = AppUpdateConfig.fromEnv(),
             os: Platform = Platform.Current,
+            isPortable: Boolean = PortableEnvironment.isPortable,
         ): AppUpdateService =
             AppUpdateService(
                 updaterProvider = {
@@ -407,6 +441,7 @@ class AppUpdateService(
                 },
                 config = config,
                 os = os,
+                isPortable = isPortable,
             )
     }
 }

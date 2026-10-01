@@ -32,6 +32,7 @@ class DatabaseCleanupTest {
             listOf(
                 file("seforim.db", 10),
                 file("seforim.db-wal", 5),
+                file("seforim.db-journal", 2),
                 file("lexical.db", 3),
                 file("catalog.pb"),
                 file("release_info.txt"),
@@ -48,7 +49,7 @@ class DatabaseCleanupTest {
         artifacts.forEach { assertFalse(it.exists(), "${it.name} should be deleted") }
         assertFalse(lucene.exists())
         assertTrue(unrelated.exists())
-        assertEquals(10L + 5 + 3 + 1 + 1 + 1 + 1 + 1 + 4, result.freedBytes)
+        assertEquals(10L + 5 + 2 + 3 + 1 + 1 + 1 + 1 + 1 + 4, result.freedBytes)
     }
 
     @Test

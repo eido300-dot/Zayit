@@ -1,0 +1,39 @@
+package io.github.kdroidfilter.seforimapp.framework.portable
+
+import io.github.kdroidfilter.seforimapp.framework.platform.currentExecutablePath
+import io.github.kdroidfilter.seforimapp.logger.infoln
+import java.nio.file.Path
+
+/**
+ * Process-wide portable-mode decision.
+ *
+ * This is an `object` rather than a DI binding because it must be available before the Metro
+ * graph exists: `main()` reads it to configure the single-instance lock, the drive lock and
+ * FileKit, and `AppSettingsStore` reads it to choose the settings backend the graph is built on.
+ * The value is computed once and never changes during the process.
+ *
+ * Must not reference `AppSettingsStore`, `AppSettings` or `MainAppState`, which read this object
+ * during their own initialization.
+ */
+object PortableEnvironment {
+    /** The portable layout, or `null` when running as a normal installation. */
+    val layout: PortableLayout? by lazy {
+        resolvePortableLayout(currentExecutablePath(), readOverride()).also { resolved ->
+            infoln { "[portable] mode=${if (resolved != null) "portable" else "host"}" }
+        }
+    }
+
+    /** True when all app data and settings live next to the program. */
+    val isPortable: Boolean get() = layout != null
+
+    /**
+     * Whether the app may delete files in [dir]: always in a normal installation; in portable mode
+     * only when [dir] really lies inside the data folder, not behind a link on the drive.
+     */
+    fun mayCleanUp(dir: Path): Boolean = layout?.let { isReallyInside(dir, it.dataDir) } ?: true
+
+    private fun readOverride(): String? =
+        (System.getenv(PORTABLE_DATA_DIR_OVERRIDE) ?: System.getProperty(PORTABLE_DATA_DIR_OVERRIDE))
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+}

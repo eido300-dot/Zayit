@@ -65,4 +65,14 @@ class AtomicFilesTest {
         assertFalse(target.exists())
         assertEquals(0, dir.list()!!.size)
     }
+
+    @Test
+    fun `chunked sync runs once per whole chunk written`() {
+        var syncs = 0
+        val chunks = ChunkedSync(chunkBytes = 10) { syncs++ }
+
+        repeat(7) { chunks.wrote(4) }
+
+        assertEquals(2, syncs)
+    }
 }

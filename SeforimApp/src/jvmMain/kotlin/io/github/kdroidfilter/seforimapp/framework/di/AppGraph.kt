@@ -14,6 +14,7 @@ import io.github.kdroidfilter.seforimapp.core.history.HistoryStore
 import io.github.kdroidfilter.seforimapp.core.selection.SelectionContext
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.core.settings.CategoryDisplaySettingsStore
+import io.github.kdroidfilter.seforimapp.features.database.health.LibraryHealthService
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabaseCleanupUseCase
 import io.github.kdroidfilter.seforimapp.features.database.update.DatabasePreparationUseCase
 import io.github.kdroidfilter.seforimapp.features.database.update.navigation.DatabaseUpdateProgressBarState
@@ -43,6 +44,7 @@ abstract class AppGraph : ViewModelGraph {
     abstract val catalogCache: CatalogCache
     abstract val databasePathProvider: DatabasePathProvider
     abstract val databaseVersionManager: DatabaseVersionManager
+    abstract val libraryHealthService: LibraryHealthService
     abstract val selectionContext: SelectionContext
     abstract val tabPersistedStateStore: TabPersistedStateStore
     abstract val tabThumbnailStore: TabThumbnailStore

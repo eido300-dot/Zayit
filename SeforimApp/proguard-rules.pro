@@ -20,6 +20,9 @@
 -keep class com.sun.jna.win32.** { *; }
 -dontwarn com.sun.jna.platform.**
 
+# ExtendedOpenOption.DIRECT (direct I/O, module jdk.unsupported), used by the library read-back
+-dontwarn com.sun.nio.file.**
+
 
 -assumenosideeffects public class androidx.compose.runtime.ComposerKt {
     void sourceInformation(androidx.compose.runtime.Composer,java.lang.String);

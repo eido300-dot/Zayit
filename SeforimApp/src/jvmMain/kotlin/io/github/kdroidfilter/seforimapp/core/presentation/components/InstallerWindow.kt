@@ -38,6 +38,7 @@ import io.github.kdroidfilter.seforimapp.core.presentation.theme.ThemeUtils
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.LocalWindowViewModelStoreOwner
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.getCenteredWindowState
 import io.github.kdroidfilter.seforimapp.core.presentation.utils.rememberWindowViewModelStoreOwner
+import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.framework.platform.PlatformInfo
 import kotlinx.coroutines.flow.StateFlow
 import org.jetbrains.compose.resources.painterResource
@@ -71,15 +72,16 @@ fun NucleusApplicationScope.InstallerWindow(
     titleBarIcon: ImageVector,
     titleBarText: String,
     progress: StateFlow<Float>,
+    visible: Boolean = true,
     content: @Composable (navController: NavHostController) -> Unit,
 ) {
     val windowState = remember { getCenteredWindowState(720, 420) }
     JewelDecoratedWindow(
-        onCloseRequest = { exitApplication() },
+        onCloseRequest = { flushSettingsAndExit() },
         title = stringResource(Res.string.app_name),
         icon = if (PlatformInfo.isMacOS) null else painterResource(Res.drawable.AppIcon),
         state = windowState,
-        visible = true,
+        visible = visible,
         resizable = false,
     ) {
         // Mirror the in-app progress bar onto the OS taskbar/dock indicator.
@@ -157,4 +159,10 @@ fun NucleusApplicationScope.InstallerWindow(
             }
         }
     }
+}
+
+/** Writes pending portable settings before exiting, so they are not lost with the process. */
+private fun NucleusApplicationScope.flushSettingsAndExit() {
+    AppSettingsStore.flushIfPortable()
+    exitApplication()
 }

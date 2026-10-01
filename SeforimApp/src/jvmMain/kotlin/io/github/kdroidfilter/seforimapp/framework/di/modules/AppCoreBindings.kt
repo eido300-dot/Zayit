@@ -18,6 +18,7 @@ import io.github.kdroidfilter.seforimapp.core.history.HistoryStore
 import io.github.kdroidfilter.seforimapp.core.selection.DefaultSelectionContext
 import io.github.kdroidfilter.seforimapp.core.selection.SelectionContext
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
+import io.github.kdroidfilter.seforimapp.core.settings.AppSettingsStore
 import io.github.kdroidfilter.seforimapp.core.settings.CategoryDisplaySettingsStore
 import io.github.kdroidfilter.seforimapp.db.UserSettingsDb
 import io.github.kdroidfilter.seforimapp.features.search.SearchHomeViewModel
@@ -26,9 +27,12 @@ import io.github.kdroidfilter.seforimapp.framework.database.DatabasePathProvider
 import io.github.kdroidfilter.seforimapp.framework.database.PersistentSqliteDriver
 import io.github.kdroidfilter.seforimapp.framework.database.applyPendingUserSettingsImport
 import io.github.kdroidfilter.seforimapp.framework.database.getUserSettingsDatabasePath
+import io.github.kdroidfilter.seforimapp.framework.database.libraryFilesFor
 import io.github.kdroidfilter.seforimapp.framework.desktop.DesktopManager
 import io.github.kdroidfilter.seforimapp.framework.di.AppScope
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.kdroidfilter.seforimapp.framework.search.AcronymFrequencyCache
+import io.github.kdroidfilter.seforimapp.framework.search.DriveSafeSearchEngine
 import io.github.kdroidfilter.seforimapp.framework.search.LuceneLookupSearchService
 import io.github.kdroidfilter.seforimapp.framework.search.RepositorySnippetSourceProvider
 import io.github.kdroidfilter.seforimapp.framework.session.SessionManager
@@ -70,9 +74,10 @@ object AppCoreBindings {
     @SingleIn(AppScope::class)
     fun provideTabTitleUpdateManager(): TabTitleUpdateManager = TabTitleUpdateManager()
 
+    // On the drive in portable mode, the host's Preferences otherwise (see AppSettingsStore).
     @Provides
     @SingleIn(AppScope::class)
-    fun provideSettings(): Settings = Settings()
+    fun provideSettings(): Settings = AppSettingsStore.settings
 
     @Provides
     @SingleIn(AppScope::class)
@@ -122,7 +127,9 @@ object AppCoreBindings {
         // read-tuning PRAGMAs. Replaces `JdbcSqliteDriver` whose ThreadedConnectionManager
         // closes the SQLite connection after every non-transactional query (confirmed by
         // JFR 2026-04-23: ~70 `NativeDB.prepare_utf8` + `NativeDB._close()` pairs / 20 s).
-        val driver = PersistentSqliteDriver("jdbc:sqlite:$dbPath")
+        // On a portable drive the driver swaps the repository's WAL and 512 MB mmap tuning for
+        // settings that cannot kill the process when the drive is unplugged (see removableDriveSql).
+        val driver = PersistentSqliteDriver("jdbc:sqlite:$dbPath", removableDrive = PortableEnvironment.isPortable)
         return SeforimRepository(dbPath, driver)
     }
 
@@ -143,32 +150,35 @@ object AppCoreBindings {
         databasePathProvider: DatabasePathProvider,
     ): SearchEngine {
         val dbPath = databasePathProvider.get()
-        val indexPath = Paths.get(if (dbPath.endsWith(".db")) "$dbPath.lucene" else "$dbPath.luceneindex")
-        val dictionaryPath = indexPath.resolveSibling("lexical.db")
+        val files = libraryFilesFor(Paths.get(dbPath))
+        val indexPath = files.textIndex
         val snippetProvider = RepositorySnippetSourceProvider(repository)
-        val lexical = LuceneSearchEngine(indexPath, snippetProvider, dictionaryPath = dictionaryPath)
+        val lexical = LuceneSearchEngine(indexPath, snippetProvider, dictionaryPath = files.dictionary)
         // Single fused index: dense vectors live in the SAME Lucene index as the text
         // (seforim.db.lucene), so the dense searcher opens that same directory.
         // The embedding model is bundled next to the DB (extracted from the .tar.zst),
         // so the embedder looks in the database directory.
         val modelDir = Paths.get(dbPath).parent
-        return HybridSearchEngine.create(lexical, indexDir = indexPath, modelDir = modelDir) { lineId, _, query ->
-            val line = repository.getLine(lineId)
-            if (line == null) {
-                null
-            } else {
-                val title = repository.getBook(line.bookId)?.title ?: ""
-                LineHit(
-                    bookId = line.bookId,
-                    bookTitle = title,
-                    lineId = lineId,
-                    lineIndex = line.lineIndex,
-                    snippet = lexical.buildSnippet(line.content, query, 5),
-                    score = 0f,
-                    rawText = line.content,
-                )
+        val engine =
+            HybridSearchEngine.create(lexical, indexDir = indexPath, modelDir = modelDir) { lineId, _, query ->
+                val line = repository.getLine(lineId)
+                if (line == null) {
+                    null
+                } else {
+                    val title = repository.getBook(line.bookId)?.title ?: ""
+                    LineHit(
+                        bookId = line.bookId,
+                        bookTitle = title,
+                        lineId = lineId,
+                        lineIndex = line.lineIndex,
+                        snippet = lexical.buildSnippet(line.content, query, 5),
+                        score = 0f,
+                        rawText = line.content,
+                    )
+                }
             }
-        }
+        // The index is memory-mapped on the JVM; a drive unplugged mid-search fails as an InternalError.
+        return if (PortableEnvironment.isPortable) DriveSafeSearchEngine(engine) else engine
     }
 
     @Provides
@@ -182,9 +192,8 @@ object AppCoreBindings {
         acronymCache: AcronymFrequencyCache,
         databasePathProvider: DatabasePathProvider,
     ): LuceneLookupSearchService {
-        val dbPath = databasePathProvider.get()
-        val indexPath = if (dbPath.endsWith(".db")) "$dbPath.lookup.lucene" else "$dbPath.lookupindex"
-        return LuceneLookupSearchService(Paths.get(indexPath), acronymCache = acronymCache)
+        val files = libraryFilesFor(Paths.get(databasePathProvider.get()))
+        return LuceneLookupSearchService(files.lookupIndex, acronymCache = acronymCache, memoryMapped = !PortableEnvironment.isPortable)
     }
 
     @Provides

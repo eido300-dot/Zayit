@@ -30,10 +30,12 @@ import dev.nucleusframework.window.jewel.JewelDialogTitleBar
 import dev.nucleusframework.window.newFullscreenControls
 import io.github.kdroidfilter.seforimapp.core.presentation.components.AnimatedHorizontalProgressBar
 import io.github.kdroidfilter.seforimapp.core.presentation.theme.ThemeUtils
+import io.github.kdroidfilter.seforimapp.core.presentation.utils.UrlOpener
 import io.github.kdroidfilter.seforimapp.framework.update.AppUpdateService
 import io.github.kdroidfilter.seforimapp.framework.update.UpdateUiState
 import io.github.kdroidfilter.seforimapp.framework.update.availableVersion
 import io.github.kdroidfilter.seforimapp.icons.Download_for_offline
+import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 import org.jetbrains.jewel.foundation.modifier.trackActivation
 import org.jetbrains.jewel.foundation.theme.JewelTheme
@@ -54,6 +56,8 @@ import seforimapp.seforimapp.generated.resources.update_dialog_title
 import seforimapp.seforimapp.generated.resources.update_downloading
 import seforimapp.seforimapp.generated.resources.update_install_restart
 import seforimapp.seforimapp.generated.resources.update_later
+import seforimapp.seforimapp.generated.resources.update_open_download_page
+import seforimapp.seforimapp.generated.resources.update_portable_message
 
 @Composable
 fun NucleusApplicationScope.UpdateDialog(
@@ -130,7 +134,7 @@ fun NucleusApplicationScope.UpdateDialog(
                         tint = JewelTheme.globalColors.text.normal,
                     )
                     Text(
-                        text = stringResource(Res.string.update_dialog_message, version),
+                        text = stringResource(updateMessage(state), version),
                         textAlign = TextAlign.Center,
                         fontSize = JewelTheme.typography.h3TextStyle.fontSize,
                         fontWeight = FontWeight.SemiBold,
@@ -173,18 +177,30 @@ fun NucleusApplicationScope.UpdateDialog(
                     }
                     DefaultButton(
                         enabled = state !is UpdateUiState.Downloading,
-                        onClick = {
-                            when (state) {
-                                is UpdateUiState.ReadyToInstall -> service.installAndRestart()
-                                is UpdateUiState.Available -> service.startDownload()
-                                else -> {}
-                            }
-                        },
+                        onClick = { runPrimaryAction(service, state) },
                     ) {
-                        Text(stringResource(Res.string.update_install_restart))
+                        Text(stringResource(primaryActionLabel(state)))
                     }
                 }
             }
         }
+    }
+}
+
+private fun updateMessage(state: UpdateUiState): StringResource =
+    if (state is UpdateUiState.PortableUpdateAvailable) Res.string.update_portable_message else Res.string.update_dialog_message
+
+private fun primaryActionLabel(state: UpdateUiState): StringResource =
+    if (state is UpdateUiState.PortableUpdateAvailable) Res.string.update_open_download_page else Res.string.update_install_restart
+
+private fun runPrimaryAction(
+    service: AppUpdateService,
+    state: UpdateUiState,
+) {
+    when (state) {
+        is UpdateUiState.ReadyToInstall -> service.installAndRestart()
+        is UpdateUiState.Available -> service.startDownload()
+        is UpdateUiState.PortableUpdateAvailable -> UrlOpener.open(AppUpdateService.DOWNLOAD_URL)
+        UpdateUiState.Idle, UpdateUiState.Checking, UpdateUiState.UpToDate, is UpdateUiState.Downloading, is UpdateUiState.Error -> Unit
     }
 }
