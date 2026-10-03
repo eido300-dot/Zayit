@@ -41,34 +41,31 @@ class DatabasePathProvider(
         synchronized(this) { cached = null }
     }
 
+    /** True when `SEFORIMAPP_DATABASE_PATH` sets the database path; reinstalling never changes that path. */
+    fun isOverridden(): Boolean = override() != null
+
+    /** Where the database is expected, whether or not it exists; [get] also requires the file. */
+    fun expected(): String = override() ?: storedPath() ?: File(FileKit.databasesDir.path, DEFAULT_DB_NAME).absolutePath
+
+    private fun override(): String? = System.getenv("SEFORIMAPP_DATABASE_PATH")?.takeIf { it.isNotBlank() }
+
+    private fun storedPath(): String? {
+        val raw = appSettings.getDatabasePath()
+        // A path to lexical.db is wrong: clear it.
+        if (raw?.endsWith("lexical.db", ignoreCase = true) == true) {
+            appSettings.setDatabasePath(null)
+            return null
+        }
+        return raw
+    }
+
     private fun resolve(): String {
-        // 1) Prefer an explicit environment variable override if provided
-        val envDbPath = System.getenv("SEFORIMAPP_DATABASE_PATH")?.takeIf { it.isNotBlank() }
-
-        // 2) Try AppSettings (but fix if it points to lexical.db which is wrong)
-        val rawSettingsPath = appSettings.getDatabasePath()
-        val settingsPath =
-            if (rawSettingsPath?.endsWith("lexical.db", ignoreCase = true) == true) {
-                // Fix incorrect path by clearing it
-                appSettings.setDatabasePath(null)
-                null
-            } else {
-                rawSettingsPath
-            }
-
-        // 3) Fallback to default location
-        val defaultDbPath = File(FileKit.databasesDir.path, DEFAULT_DB_NAME).absolutePath
-
-        val dbPath = envDbPath ?: settingsPath ?: defaultDbPath
+        // Environment override, then the stored path, then the default location.
+        val dbPath = expected()
 
         infoln { "[DatabaseUtils] Database path resolved: $dbPath (exists: ${File(dbPath).exists()})" }
 
-        // Check if the database file exists
-        val dbFile = File(dbPath)
-        if (!dbFile.exists()) {
-            throw IllegalStateException("Database file not found at $dbPath")
-        }
-
+        check(File(dbPath).exists()) { "Database file not found at $dbPath" }
         return dbPath
     }
 }

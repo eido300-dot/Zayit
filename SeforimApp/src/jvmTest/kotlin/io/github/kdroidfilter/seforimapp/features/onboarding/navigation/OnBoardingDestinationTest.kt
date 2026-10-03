@@ -19,6 +19,12 @@ class OnBoardingDestinationTest {
     }
 
     @Test
+    fun `InstallLocationScreen is a valid OnBoardingDestination`() {
+        val destination: OnBoardingDestination = OnBoardingDestination.InstallLocationScreen
+        assertIs<OnBoardingDestination>(destination)
+    }
+
+    @Test
     fun `AvailableDiskSpaceScreen is a valid OnBoardingDestination`() {
         val destination: OnBoardingDestination = OnBoardingDestination.AvailableDiskSpaceScreen
         assertIs<OnBoardingDestination>(destination)

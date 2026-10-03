@@ -3,7 +3,9 @@ package io.github.kdroidfilter.seforimapp.features.onboarding.extract
 import com.github.luben.zstd.ZstdInputStream
 import io.github.kdroidfilter.seforimapp.core.settings.AppSettings
 import io.github.kdroidfilter.seforimapp.framework.database.PendingDbCleanup
+import io.github.kdroidfilter.seforimapp.framework.io.ChunkedSync
 import io.github.kdroidfilter.seforimapp.framework.io.writeAtomically
+import io.github.kdroidfilter.seforimapp.framework.portable.PortableEnvironment
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
 import io.github.vinceglb.filekit.path
@@ -22,6 +24,9 @@ import java.text.Normalizer
 class ExtractUseCase(
     private val appSettings: AppSettings,
 ) {
+    /** A copy on a drive extracts the library onto it: see [ChunkedSync]. */
+    private val syncEachChunk: Boolean get() = PortableEnvironment.isPortable
+
     suspend fun extractToDatabase(
         sourcePath: String,
         onProgress: (Float) -> Unit,
@@ -111,10 +116,12 @@ class ExtractUseCase(
             ZstdInputStream(cis).use { zin ->
                 targetDb.writeAtomically { out ->
                     val buffer = ByteArray(1024 * 1024)
+                    val chunks = if (syncEachChunk) ChunkedSync { out.fd.sync() } else null
                     while (true) {
                         val read = zin.read(buffer)
                         if (read <= 0) break
                         out.write(buffer, 0, read)
+                        chunks?.wrote(read)
                         onProgress(cis.count.toFloat() / totalCompressed.toFloat())
                     }
                 }
@@ -170,12 +177,14 @@ class ExtractUseCase(
                                     outFile.parentFile?.mkdirs()
                                     outFile.writeAtomically { out ->
                                         val buffer = ByteArray(1024 * 1024)
+                                        val chunks = if (syncEachChunk) ChunkedSync { out.fd.sync() } else null
                                         var remaining = entry.size
                                         while (remaining > 0) {
                                             val toRead = if (remaining >= buffer.size) buffer.size else remaining.toInt()
                                             val read = tar.read(buffer, 0, toRead)
                                             if (read <= 0) break
                                             out.write(buffer, 0, read)
+                                            chunks?.wrote(read)
                                             remaining -= read
                                             onProgress(cis.count.toFloat() / totalCompressed.toFloat())
                                         }
@@ -259,12 +268,14 @@ class ExtractUseCase(
                                 outFile.parentFile?.mkdirs()
                                 outFile.writeAtomically { out ->
                                     val buffer = ByteArray(1024 * 1024)
+                                    val chunks = if (syncEachChunk) ChunkedSync { out.fd.sync() } else null
                                     var remaining = entry.size
                                     while (remaining > 0) {
                                         val toRead = if (remaining >= buffer.size) buffer.size else remaining.toInt()
                                         val read = tar.read(buffer, 0, toRead)
                                         if (read <= 0) break
                                         out.write(buffer, 0, read)
+                                        chunks?.wrote(read)
                                         remaining -= read
                                         onUiProgress(mapProgress(cis.count))
                                     }

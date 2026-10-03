@@ -67,6 +67,7 @@ class OnboardingFlowIntegrationTest {
             listOf(
                 OnBoardingDestination.InitScreen,
                 OnBoardingDestination.LicenceScreen,
+                OnBoardingDestination.InstallLocationScreen,
                 OnBoardingDestination.AvailableDiskSpaceScreen,
                 OnBoardingDestination.TypeOfInstallationScreen,
                 OnBoardingDestination.DatabaseOnlineInstallerScreen,
@@ -78,8 +79,8 @@ class OnboardingFlowIntegrationTest {
                 OnBoardingDestination.FinishScreen,
             )
 
-        assertEquals(11, allDestinations.size)
-        assertEquals(11, allDestinations.toSet().size) // All unique
+        assertEquals(12, allDestinations.size)
+        assertEquals(12, allDestinations.toSet().size) // All unique
     }
 
     @Test
@@ -88,6 +89,7 @@ class OnboardingFlowIntegrationTest {
             listOf(
                 OnBoardingDestination.InitScreen,
                 OnBoardingDestination.LicenceScreen,
+                OnBoardingDestination.InstallLocationScreen,
                 OnBoardingDestination.AvailableDiskSpaceScreen,
                 OnBoardingDestination.TypeOfInstallationScreen,
                 OnBoardingDestination.DatabaseOnlineInstallerScreen, // Online path
@@ -110,6 +112,7 @@ class OnboardingFlowIntegrationTest {
             listOf(
                 OnBoardingDestination.InitScreen,
                 OnBoardingDestination.LicenceScreen,
+                OnBoardingDestination.InstallLocationScreen,
                 OnBoardingDestination.AvailableDiskSpaceScreen,
                 OnBoardingDestination.TypeOfInstallationScreen,
                 OnBoardingDestination.OfflineFileSelectionScreen, // Offline path
