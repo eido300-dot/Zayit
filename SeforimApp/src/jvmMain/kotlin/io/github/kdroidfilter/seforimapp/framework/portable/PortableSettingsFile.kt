@@ -26,9 +26,9 @@ internal const val MAX_SETTINGS_BYTES = 1L shl 20
 
 /**
  * Whether [attributes] describe an entry that cannot hold settings: a link, a folder, or outside
- * Windows a pipe, socket or device, which a read could block on or never finish. On Windows such
- * "other" entries are files with a reparse point, like those compressed by `compact /exe`, whose
- * data reads normally; one without data reads as empty and fails the checksum.
+ * Windows a pipe, socket or device, which a read could block on or never finish. On Windows,
+ * "other" means a file with a reparse point that is not a link, such as a cloud placeholder; it is
+ * read like any file, without following that point, and what it holds must pass the checksum.
  */
 private fun cannotHoldSettings(attributes: BasicFileAttributes): Boolean =
     attributes.isSymbolicLink || attributes.isDirectory || (attributes.isOther && !PlatformInfo.isWindows)
