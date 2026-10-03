@@ -228,9 +228,10 @@ class PortableSettingsFileTest {
                 if (!compact.waitFor(COMPACT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) compact.destroyForcibly()
                 compact.exitValue()
             }.getOrNull()
-        assumeTrue("compact is not available", compacted == 0)
+        assumeTrue("compact did not compress the file", compacted == 0)
 
-        // Java may see the compressed file as a reparse point ("other"); its data must read the same.
+        // Whether Java reports the compressed file as "other" or not (on GitHub's Windows runners it does
+        // not, so this does not cover that case), its data must read the same.
         assertContentEquals(bytes, Files.readAllBytes(main), "read following links")
         assertContentEquals(bytes, readSettingsBytes(main), "read without following links")
         assertEquals("1", loaded().getProperty("v"))
@@ -267,6 +268,38 @@ class PortableSettingsFileTest {
         } finally {
             Files.setPosixFilePermissions(root, permissions)
         }
+    }
+
+    @Test
+    fun `a refused lookup is retried and loads once the refusal ends`() {
+        assumeTrue("no POSIX permissions here", "posix" in FileSystems.getDefault().supportedFileAttributeViews())
+        file.save(props("v" to "1"))
+        val permissions = Files.getPosixFilePermissions(root)
+        Files.setPosixFilePermissions(root, emptySet())
+        try {
+            assumeFalse("permissions are not enforced for this user", Files.isReadable(main))
+            val delays = mutableListOf<Long>()
+            // The refusal ends while the lookup waits, as when a scanner lets go of a deleted copy.
+            val retried =
+                PortableSettingsFile(main, sleeper = {
+                    delays += it
+                    Files.setPosixFilePermissions(root, permissions)
+                })
+
+            assertEquals("1", assertIs<LoadResult.Loaded>(retried.load()).properties.getProperty("v"))
+            assertEquals(listOf(50L), delays)
+        } finally {
+            Files.setPosixFilePermissions(root, permissions)
+        }
+    }
+
+    @Test
+    fun `missing copies are looked up once, without waiting`() {
+        val delays = mutableListOf<Long>()
+
+        assertIs<LoadResult.Loaded>(PortableSettingsFile(main, sleeper = { delays += it }).load())
+
+        assertTrue(delays.isEmpty(), "slept $delays")
     }
 
     @Test

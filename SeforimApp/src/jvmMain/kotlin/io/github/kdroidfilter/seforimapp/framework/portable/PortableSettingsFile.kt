@@ -154,7 +154,8 @@ class PortableSettingsFile(
      * Reads the first intact copy. Never throws. A failed read of one copy (an antivirus scanner
      * holding it, a slow mount) is retried briefly and does not stop the others from being read,
      * but the result is then [LoadResult.IoError], because the unreadable copy may be the newest.
-     * A copy that cannot even be looked up counts as unreadable, after a retry only when refused.
+     * A copy that cannot even be looked up counts as unreadable at once, unless the lookup was
+     * refused: that is retried briefly, and a copy gone by then counts as missing.
      */
     fun load(): LoadResult {
         var anyCopy = false
@@ -323,7 +324,7 @@ private fun clearForSave(path: Path) {
         }
     if (cannotHoldSettings(attributes)) {
         val aside = siblingWithSuffix(path, ".aside-${System.currentTimeMillis()}")
-        moveWithRetry(path, aside)
+        moveWithRetry(path, aside, policy = RetryPolicy.ASIDE)
         warnln { "[portable] renamed ${path.fileName} to ${aside.fileName}: not a file" }
     } else if (attributes is DosFileAttributes && attributes.isReadOnly) {
         Files.setAttribute(path, "dos:readonly", false, NOFOLLOW_LINKS)
